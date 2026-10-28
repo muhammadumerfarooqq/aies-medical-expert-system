@@ -13,6 +13,7 @@ Run the demo / acceptance check with:  python -m expert_system.engine
 from __future__ import annotations
 
 import sys
+from decimal import ROUND_HALF_UP, Decimal
 from dataclasses import asdict, dataclass, field
 from typing import Optional
 
@@ -73,6 +74,18 @@ class DiagnosisResult:
 
 
 # ------------------------------------------------------------------- CF helpers
+
+def fmt(x: float, dp: int) -> str:
+    """Format x with dp decimals, rounding halves UP (for display only).
+
+    Python's f"{x:.2f}" works on the binary float, so 0.595 (stored as
+    0.59499999...) prints as 0.59 instead of 0.60. Rounding to 9 decimals
+    first removes that noise, then Decimal rounds half up as people expect.
+    The raw CF values are never changed, only their text.
+    """
+    exact = Decimal(str(round(x, 9)))
+    return str(exact.quantize(Decimal(1).scaleb(-dp), rounding=ROUND_HALF_UP))
+
 
 def combine_cfs(contributions: list[float]) -> float:
     """Combine rule contributions for one fact: CF = CF_old + c * (1 - CF_old)."""
@@ -223,24 +236,33 @@ def run_forward_chaining(kb: dict, initial: dict[str, float]):
 
 # ------------------------------------------------------------------ explanations
 
-def explain_fact(fact: str, memory: dict, contributions: dict,
+def display_name(kb: dict, item_id: str) -> str:
+    """Human-readable name: symptom label, disease name, or prettified fact id."""
+    if item_id in kb["symptoms"]:
+        return kb["symptoms"][item_id]["label"]
+    if item_id in kb["diseases"]:
+        return kb["diseases"][item_id]["name"]
+    return item_id.replace("_", " ").capitalize()   # "dengue_signs" -> "Dengue signs"
+
+
+def explain_fact(kb: dict, fact: str, memory: dict, contributions: dict,
                  last_firing: dict, indent: int = 0) -> list[str]:
     """Justify a fact: its supporting rules, expanded down to root symptoms."""
     pad = "  " * indent
     rule_ids = list(contributions.get(fact, {}))
-    header = f"{pad}{fact}: CF {memory[fact]:.4f}"
+    header = f"{pad}{display_name(kb, fact)}: CF {fmt(memory[fact], 3)}"
     if len(rule_ids) > 1:
-        parts = ", ".join(f"{r} {contributions[fact][r]:.4f}" for r in rule_ids)
+        parts = ", ".join(f"{r} {fmt(contributions[fact][r], 3)}" for r in rule_ids)
         header += f" (combined from {len(rule_ids)} rules: {parts})"
     lines = [header]
     for rid in rule_ids:
         f = last_firing[rid]
-        prem = ", ".join(f"{p} {cf:.3f}" for p, cf in f.premises.items())
-        lines.append(f"{pad}  {rid} [{prem}] -> min {f.min_premise_cf:.3f} x "
-                     f"rule CF {f.rule_cf:.2f} = {f.contribution:.4f}")
+        prem = ", ".join(f"{display_name(kb, p)} {fmt(cf, 3)}" for p, cf in f.premises.items())
+        lines.append(f"{pad}  {rid} [{prem}] -> min {fmt(f.min_premise_cf, 3)} x "
+                     f"rule CF {fmt(f.rule_cf, 2)} = {fmt(f.contribution, 3)}")
         for premise in f.premises:
             if premise in contributions:
-                lines.extend(explain_fact(premise, memory, contributions,
+                lines.extend(explain_fact(kb, premise, memory, contributions,
                                           last_firing, indent + 2))
     return lines
 
@@ -248,18 +270,24 @@ def explain_fact(fact: str, memory: dict, contributions: dict,
 def why_not_fact(kb: dict, fact: str, memory: dict, indent: int = 0) -> list[str]:
     """Explain a missing fact: for each rule that could conclude it, what is present/missing."""
     pad = "  " * indent
+    threshold = kb["meta"]["cf_conventions"]["rule_fire_threshold"]
     lines: list[str] = []
     for rule in kb["rules"]:
         if rule["then"] != fact:
             continue
-        lines.append(f"{pad}{rule['id']} needs {', '.join(rule['if'])}")
+        needs = ", ".join(display_name(kb, p) for p in rule["if"])
+        lines.append(f"{pad}{rule['id']} needs {needs}")
         for premise in rule["if"]:
-            if premise in memory:
-                lines.append(f"{pad}  {premise}: present (CF {memory[premise]:.3f})")
+            name = display_name(kb, premise)
+            if premise in memory and memory[premise] < threshold - EPSILON:
+                lines.append(f"{pad}  {name}: present but too weak to fire a rule "
+                             f"(CF {fmt(memory[premise], 2)} < {threshold})")
+            elif premise in memory:
+                lines.append(f"{pad}  {name}: present (CF {fmt(memory[premise], 3)})")
             elif premise in kb["symptoms"]:
-                lines.append(f"{pad}  {premise}: missing")
+                lines.append(f"{pad}  {name}: missing")
             else:
-                lines.append(f"{pad}  {premise}: not derived")
+                lines.append(f"{pad}  {name}: not derived")
                 lines.extend(why_not_fact(kb, premise, memory, indent + 2))
     return lines
 
@@ -287,7 +315,7 @@ def diagnose(kb: dict, symptoms: dict) -> DiagnosisResult:
         info = kb["diseases"][did]
         result.diseases.append(DiseaseResult(
             did, info["name"], memory[did], memory[did] / total * 100, info["severity"],
-            info["description"], explain_fact(did, memory, contributions, last_firing),
+            info["description"], explain_fact(kb, did, memory, contributions, last_firing),
             info["treatment"], info["prevention"], info["sources"]))
 
     # "Why not" for every disease that was not shown.
@@ -295,7 +323,7 @@ def diagnose(kb: dict, symptoms: dict) -> DiagnosisResult:
         if did in shown:
             continue
         if memory.get(did, 0.0) > 0:
-            result.why_not[did] = [f"CF {memory[did]:.4f} is below the display "
+            result.why_not[did] = [f"CF {fmt(memory[did], 3)} is below the display "
                                    f"threshold {conv['display_threshold']}"]
         else:
             result.why_not[did] = why_not_fact(kb, did, memory)
@@ -345,10 +373,10 @@ def check_case(case: dict, result: DiagnosisResult) -> list[str]:
     else:
         for (did, cf), (_, expected) in zip(got, case["shown"]):
             if abs(cf - expected) > 0.001:
-                problems.append(f"{did} CF {cf:.4f} != {expected}")
+                problems.append(f"{did} CF {fmt(cf, 4)} != {expected}")
     for d, expected in zip(result.diseases, case.get("percents", [])):
         if abs(d.percent - expected) > 0.05:
-            problems.append(f"{d.disease_id} percent {d.percent:.1f} != {expected}")
+            problems.append(f"{d.disease_id} percent {fmt(d.percent, 1)} != {expected}")
     if [a["id"] for a in result.alerts] != case["alerts"]:
         problems.append(f"alerts {[a['id'] for a in result.alerts]} != {case['alerts']}")
     if result.unknown_symptoms != case["unknown"]:
@@ -366,7 +394,7 @@ def print_result(result: DiagnosisResult) -> None:
     if not result.diseases:
         print("  No disease reached the display threshold.")
     for i, d in enumerate(result.diseases, 1):
-        print(f"  {i}. {d.name}: CF {d.cf:.2f} ({d.cf:.4f}), {d.percent:.1f}%, {d.severity}")
+        print(f"  {i}. {d.name}: CF {fmt(d.cf, 2)} ({fmt(d.cf, 4)}), {fmt(d.percent, 1)}%, {d.severity}")
     if result.unknown_symptoms:
         print(f"  Unknown symptoms: {', '.join(result.unknown_symptoms)}")
     for w in result.warnings:
@@ -377,7 +405,7 @@ def print_result(result: DiagnosisResult) -> None:
             action = f"{f.rule_id} -> ALERT"
         else:
             action = (f"{f.rule_id} -> {f.concluded_fact} "
-                      f"{f.cf_before:.3f} -> {f.cf_after:.3f}"
+                      f"{fmt(f.cf_before, 3)} -> {fmt(f.cf_after, 3)}"
                       + (" (re-fire)" if f.refire else ""))
         print(f"    cycle {f.cycle}: [{conflict}] fired {action}")
 

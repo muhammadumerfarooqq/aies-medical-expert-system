@@ -10,11 +10,12 @@ Artificial Intelligence & Expert Systems (AIES), Fall 2026, NED University
 
 ```
 AIES-CCP/
-├── main.py                  # Entry point (loads and verifies the KB; no diagnosis yet)
+├── main.py                  # Entry point: verifies the KB, then starts the CLI
 ├── expert_system/
 │   ├── __init__.py          # Package marker for the engine code
 │   ├── kb_verify.py         # Loads the KB and checks its consistency (8 checks)
-│   └── engine.py            # Generic forward-chaining inference engine + Checkpoint A demo
+│   ├── engine.py            # Generic forward-chaining inference engine + Checkpoint A demo
+│   └── cli.py               # Command-line interface (interactive and --symptoms modes)
 ├── data/
 │   └── knowledge_base.json  # The knowledge base: symptoms, diseases, rules, red flags
 ├── tests/.gitkeep           # Test cases go here (Phase 4)
@@ -91,12 +92,45 @@ This runs the 8 consistency checks (unknown symptoms, bad THEN targets, unused f
 python -m expert_system.engine
 ```
 
+## Using the CLI
+
+`expert_system/cli.py` is generic: every symptom name, label, synonym, disease and message comes from the knowledge base.
+
+**Interactive mode** (`python main.py`):
+
+1. A numbered list of the known symptoms is shown.
+2. Enter symptoms separated by commas, as names, list numbers, or Roman Urdu synonyms (for example `bukhar, khansi`). An exact match is accepted. A close match asks `Did you mean 'Headache'? (y/n)`. Anything else is reported as not in the knowledge base.
+3. For each intensity symptom you pick `[1] mild [2] moderate [3] severe` (Enter = moderate). Yes/no symptoms count as "yes".
+4. Follow-up questions come from the KB: if you reported fever, you are asked `Fever lasting more than 3 days? (y/n)`.
+5. The result is printed (format below), followed by a menu: `[1]` reasoning trace, `[2]` why other diseases were ruled out, `[3]` new consultation, `[4]` quit. Ctrl+C or end of input exits cleanly.
+
+**Non-interactive mode** (for screenshots and tests):
+
+```
+python main.py --symptoms "bukhar:moderate, rash:yes, eye pain, zukam:mild"
+python main.py --symptoms "fever, cough, breathlessness, chest pain" --trace
+python main.py --symptoms "fever, headche, ulti, body pain" --why-not
+```
+
+Symptoms can be separated by commas, "and", "aur", "&" or "+" (for example `bukhar aur sir dard`); this works in both modes. Each entry is `name[:value]` where value is `mild`, `moderate`, `severe`, `yes` or `no`. The default is `moderate` for intensity symptoms and `yes` for yes/no symptoms. Close matches are never auto-accepted; they are reported as `Unknown symptom 'headche' - did you mean 'Headache'?`. Follow-up symptoms are used only if you give them explicitly (for example `prolonged fever:yes`).
+
+| Flag | Meaning |
+|---|---|
+| `--symptoms "..."` | run once without questions |
+| `--trace` | also print the forward-chaining trace |
+| `--why-not` | also explain why the other diseases were ruled out |
+| `--no-color` | disable ANSI colours (colour is used only on a real terminal) |
+
+**Synonyms:** each symptom in the KB lists English and Roman Urdu synonyms (`bukhar`, `khansi`, `zukam`, `ulti`, `pait dard`, `kamzori`, ...). Adding a synonym to the JSON makes it work in the CLI with no code change.
+
+**Result format** (same in both modes): red-flag alerts first (framed with `!` lines and an `EMERGENCY:` prefix), the recognised symptoms, a ranked table (rank, disease, severity, confidence %, CF), then for each disease its description, the reasoning ("Why this was suggested"), treatment, prevention and sources. Unknown symptoms and warnings follow. If no disease reaches the confidence threshold (30%, from the KB) the CLI says there is not enough evidence. The disclaimer is always last.
+
 ## Progress
 
 - [x] Phase 0: Setup
 - [x] Phase 1: Knowledge Base
 - [x] Phase 2: Inference Engine
-- [ ] Phase 3: CLI
+- [x] Phase 3: CLI
 - [ ] Phase 4: Tests
 - [ ] Phase 5: Hybrid Backward Chaining
 - [ ] Phase 6: Streamlit GUI
