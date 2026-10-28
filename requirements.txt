@@ -1,0 +1,2 @@
+# Engine, knowledge base and CLI use only the Python standard library.
+# streamlit will be added in Phase 6 only if the GUI is built.

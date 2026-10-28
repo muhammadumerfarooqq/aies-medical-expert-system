@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Secrets and credentials
+.env
+.env.*
+*.key
+*.pem
+secrets.*
+.streamlit/secrets.toml
+
+# Logs and temp files
+*.log
+*.tmp
+
+# Editors / IDEs
+.idea/
+.vscode/
+
+# OS files
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Office lock files
+~$*
