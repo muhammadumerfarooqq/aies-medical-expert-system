@@ -1,0 +1,307 @@
+{
+  "meta": {
+    "title": "Intelligent Medical Diagnosis Expert System - Knowledge Base",
+    "version": "1.0",
+    "cf_conventions": {
+      "intensity_cf": {"mild": 0.4, "moderate": 0.7, "severe": 1.0, "yes": 1.0},
+      "rule_fire_threshold": 0.2,
+      "display_threshold": 0.30
+    },
+    "severity_rank": {"severe": 3, "moderate": 2, "mild": 1},
+    "disclaimer": "This system is an educational project, not a medical diagnosis. Always consult a qualified doctor.",
+    "sources": [
+      {"name": "WHO - Malaria fact sheet (4 Dec 2025)", "url": "https://who.int/news-room/fact-sheets/detail/malaria"},
+      {"name": "WHO - Typhoid fact sheet (30 Mar 2023)", "url": "https://who.int/news-room/fact-sheets/detail/typhoid"},
+      {"name": "WHO - Influenza (seasonal) fact sheet (28 Feb 2025)", "url": "https://who.int/en/news-room/fact-sheets/detail/influenza-(seasonal)"},
+      {"name": "WHO - Pneumonia health topic", "url": "https://www.who.int/health-topics/pneumonia"},
+      {"name": "WHO Western Pacific - Dengue and severe dengue", "url": "https://www.who.int/westernpacific/health-topics/dengue-and-severe-dengue"},
+      {"name": "CDC - Dengue symptoms", "url": "https://www.cdc.gov/dengue/symptoms"},
+      {"name": "CDC - Dengue treatment", "url": "https://www.cdc.gov/dengue/treatment/index.html"},
+      {"name": "CDC - Common cold fact sheet (2026)", "url": "https://cdc.gov/common-cold/media/pdfs/2026/03/BAA_Common-Cold_Final-508.pdf"},
+      {"name": "CDC - FluView quick reference (ILI definition)", "url": "https://gis.cdc.gov/grasp/fluview/FluViewPhase1QuickReferenceGuide.pdf"},
+      {"name": "Russell, S. & Norvig, P., Artificial Intelligence: A Modern Approach, 2nd ed. - Sec. 7.5 (forward chaining), Sec. 14.7 (certainty factors, MYCIN)", "url": null},
+      {"name": "Shortliffe, E. H. & Buchanan, B. G. (1975). A model of inexact reasoning in medicine. Mathematical Biosciences, 23, 351-379.", "url": null}
+    ]
+  },
+  "symptoms": {
+    "fever": {
+      "label": "Fever",
+      "input": "intensity",
+      "synonyms": ["temperature", "high temperature", "feverish", "bukhar"],
+      "knowledge_type": "factual"
+    },
+    "fever_more_than_3_days": {
+      "label": "Fever lasting more than 3 days",
+      "input": "yes_no",
+      "synonyms": ["prolonged fever", "fever for days"],
+      "knowledge_type": "factual",
+      "ask_only_if": "fever"
+    },
+    "chills": {
+      "label": "Chills",
+      "input": "intensity",
+      "synonyms": ["shivering", "rigors", "kapkapi"],
+      "knowledge_type": "factual"
+    },
+    "sweating": {
+      "label": "Sweating",
+      "input": "intensity",
+      "synonyms": ["night sweats", "paseena"],
+      "knowledge_type": "factual"
+    },
+    "headache": {
+      "label": "Headache",
+      "input": "intensity",
+      "synonyms": ["head pain", "sir dard"],
+      "knowledge_type": "factual"
+    },
+    "body_aches": {
+      "label": "Body / muscle / joint pain",
+      "input": "intensity",
+      "synonyms": ["muscle pain", "joint pain", "body pain", "badan dard"],
+      "knowledge_type": "factual"
+    },
+    "fatigue": {
+      "label": "Fatigue",
+      "input": "intensity",
+      "synonyms": ["tiredness", "weakness", "malaise", "kamzori"],
+      "knowledge_type": "factual"
+    },
+    "cough": {
+      "label": "Cough",
+      "input": "intensity",
+      "synonyms": ["dry cough", "khansi"],
+      "knowledge_type": "factual"
+    },
+    "sore_throat": {
+      "label": "Sore throat",
+      "input": "intensity",
+      "synonyms": ["throat pain", "gala kharab"],
+      "knowledge_type": "factual"
+    },
+    "runny_nose": {
+      "label": "Runny nose",
+      "input": "intensity",
+      "synonyms": ["nasal discharge", "blocked nose", "zukam"],
+      "knowledge_type": "factual"
+    },
+    "sneezing": {
+      "label": "Sneezing",
+      "input": "intensity",
+      "synonyms": ["sneeze", "cheenk"],
+      "knowledge_type": "factual"
+    },
+    "rash": {
+      "label": "Skin rash",
+      "input": "yes_no",
+      "synonyms": ["red spots", "skin spots"],
+      "knowledge_type": "factual"
+    },
+    "pain_behind_eyes": {
+      "label": "Pain behind the eyes",
+      "input": "intensity",
+      "synonyms": ["eye pain", "retro-orbital pain"],
+      "knowledge_type": "factual"
+    },
+    "bleeding_gums": {
+      "label": "Bleeding gums or nose",
+      "input": "yes_no",
+      "synonyms": ["gum bleeding", "nose bleed"],
+      "knowledge_type": "factual"
+    },
+    "nausea_vomiting": {
+      "label": "Nausea or vomiting",
+      "input": "intensity",
+      "synonyms": ["nausea", "vomiting", "ulti"],
+      "knowledge_type": "factual"
+    },
+    "abdominal_pain": {
+      "label": "Abdominal pain",
+      "input": "intensity",
+      "synonyms": ["stomach pain", "belly pain", "pait dard"],
+      "knowledge_type": "factual"
+    },
+    "diarrhea_or_constipation": {
+      "label": "Diarrhoea or constipation",
+      "input": "intensity",
+      "synonyms": ["loose motions", "diarrhea", "constipation"],
+      "knowledge_type": "factual"
+    },
+    "shortness_of_breath": {
+      "label": "Shortness of breath",
+      "input": "intensity",
+      "synonyms": ["breathlessness", "difficulty breathing", "saans phoolna"],
+      "knowledge_type": "factual"
+    },
+    "chest_pain": {
+      "label": "Chest pain",
+      "input": "intensity",
+      "synonyms": ["chest tightness", "seene mein dard"],
+      "knowledge_type": "factual"
+    },
+    "confusion": {
+      "label": "Confusion",
+      "input": "yes_no",
+      "synonyms": ["disorientation", "drowsiness", "altered consciousness"],
+      "knowledge_type": "factual"
+    }
+  },
+  "diseases": {
+    "pneumonia": {
+      "name": "Pneumonia",
+      "severity": "severe",
+      "description": "Acute infection of the lungs (bacterial, viral or fungal). Cough, shortness of breath, fever, chest pain.",
+      "treatment": [
+        "See a doctor promptly.",
+        "Antibiotics if bacterial (WHO preferred: amoxicillin), prescribed by a doctor.",
+        "Hospital care for severe cases.",
+        "Rest and plenty of fluids."
+      ],
+      "prevention": [
+        "Vaccination (pneumococcal, Hib, measles, influenza, whooping cough)",
+        "Frequent handwashing",
+        "Reduce indoor air pollution",
+        "Stop smoking",
+        "Healthy diet"
+      ],
+      "sources": ["WHO"],
+      "knowledge_type": "factual"
+    },
+    "dengue": {
+      "name": "Dengue",
+      "severity": "severe",
+      "description": "Viral infection spread by Aedes mosquitoes. High fever with pain behind the eyes, aches, nausea, rash; lasts 2–7 days. Severe dengue is a medical emergency.",
+      "treatment": [
+        "No specific medicine.",
+        "Rest.",
+        "Drink plenty of fluids/electrolytes.",
+        "Paracetamol for fever and pain.",
+        "Do not take aspirin or ibuprofen (bleeding risk).",
+        "See a doctor and watch for warning signs."
+      ],
+      "prevention": [
+        "Repellents (DEET, IR3535, icaridin)",
+        "Long sleeves and trousers",
+        "Window screens and mosquito nets",
+        "Cover water containers, drain standing water, discard tyres/containers"
+      ],
+      "sources": ["WHO", "CDC"],
+      "knowledge_type": "factual"
+    },
+    "malaria": {
+      "name": "Malaria",
+      "severity": "severe",
+      "description": "Parasitic disease (Plasmodium) spread by infected Anopheles mosquitoes. Fever, headache, chills. Always requires treatment with medicine.",
+      "treatment": [
+        "Confirm with a blood test (microscopy or rapid diagnostic test).",
+        "Artemisinin-based combination therapy (ACT) prescribed by a doctor.",
+        "Always requires medicine.",
+        "Severe symptoms need emergency care."
+      ],
+      "prevention": [
+        "Insecticide-treated bed nets",
+        "Repellents after dusk",
+        "Protective clothing and window screens",
+        "Preventive medicine for travellers",
+        "WHO-recommended vaccines (RTS,S, R21) for young children in high-transmission areas"
+      ],
+      "sources": ["WHO"],
+      "knowledge_type": "factual"
+    },
+    "typhoid": {
+      "name": "Typhoid",
+      "severity": "moderate",
+      "description": "Bacterial infection (Salmonella Typhi) spread through contaminated food and water. Prolonged high fever, abdominal pain, constipation or diarrhoea.",
+      "treatment": [
+        "Blood test to confirm.",
+        "Antibiotics prescribed by a doctor, taken for the full course (antimicrobial resistance is common).",
+        "Wash hands after toilet.",
+        "Do not prepare food for others until cleared."
+      ],
+      "prevention": [
+        "Safe (boiled/treated) water",
+        "Adequate sanitation",
+        "Eat thoroughly cooked, hot food",
+        "Hand hygiene",
+        "Typhoid conjugate vaccine"
+      ],
+      "sources": ["WHO"],
+      "knowledge_type": "factual"
+    },
+    "influenza": {
+      "name": "Influenza",
+      "severity": "moderate",
+      "description": "Acute viral respiratory infection. Sudden fever, dry cough, headache, muscle and joint pain, malaise.",
+      "treatment": [
+        "Rest, drink fluids, treat fever.",
+        "Seek care if symptoms worsen.",
+        "Antivirals as soon as possible for high-risk or severe cases (doctor-prescribed)."
+      ],
+      "prevention": [
+        "Annual vaccination",
+        "Wash hands regularly",
+        "Cover coughs and sneezes",
+        "Stay home when unwell",
+        "Avoid touching eyes, nose and mouth"
+      ],
+      "sources": ["WHO"],
+      "knowledge_type": "factual"
+    },
+    "common_cold": {
+      "name": "Common Cold",
+      "severity": "mild",
+      "description": "Viral infection of the nose and throat. Sneezing, runny nose, sore throat; most people have no fever; resolves on its own.",
+      "treatment": [
+        "Rest and fluids.",
+        "Saline nasal spray, humidifier, lozenges.",
+        "Honey for cough (age 1+).",
+        "OTC medicines only relieve symptoms.",
+        "Antibiotics do not help.",
+        "See a doctor if breathing is difficult, fever lasts more than 4 days, or symptoms last more than 10 days."
+      ],
+      "prevention": [
+        "Wash hands",
+        "Avoid touching face",
+        "Avoid close contact with sick people",
+        "Keep vaccines up to date"
+      ],
+      "sources": ["CDC"],
+      "knowledge_type": "factual"
+    }
+  },
+  "intermediate_facts": {
+    "pneumonia_signs": {"description": "Evidence pattern consistent with pneumonia"},
+    "dengue_signs": {"description": "Evidence pattern consistent with dengue"},
+    "malaria_signs": {"description": "Evidence pattern consistent with malaria"},
+    "typhoid_signs": {"description": "Evidence pattern consistent with typhoid"},
+    "prolonged_fever": {"description": "Fever persisting more than 3 days"},
+    "flu_signs": {"description": "Evidence pattern consistent with influenza"},
+    "cold_signs": {"description": "Evidence pattern consistent with the common cold"}
+  },
+  "rules": [
+    {"id": "R1", "if": ["cough", "shortness_of_breath"], "then": "pneumonia_signs", "cf": 0.80, "priority": 30, "knowledge_type": "heuristic", "rationale": "Lower respiratory pattern", "source": "WHO"},
+    {"id": "R2", "if": ["chest_pain"], "then": "pneumonia_signs", "cf": 0.50, "priority": 30, "knowledge_type": "heuristic", "rationale": "Chest pain listed for pneumonia", "source": "WHO"},
+    {"id": "R3", "if": ["fever", "pneumonia_signs"], "then": "pneumonia", "cf": 0.85, "priority": 30, "knowledge_type": "heuristic", "rationale": "Fever + lower respiratory signs", "source": "WHO"},
+    {"id": "R4", "if": ["rash", "pain_behind_eyes"], "then": "dengue_signs", "cf": 0.85, "priority": 30, "knowledge_type": "heuristic", "rationale": "Most specific dengue pair", "source": "WHO, CDC"},
+    {"id": "R5", "if": ["body_aches", "nausea_vomiting"], "then": "dengue_signs", "cf": 0.60, "priority": 30, "knowledge_type": "heuristic", "rationale": "Dengue: aches + nausea/vomiting", "source": "WHO, CDC"},
+    {"id": "R6", "if": ["bleeding_gums"], "then": "dengue_signs", "cf": 0.70, "priority": 30, "knowledge_type": "heuristic", "rationale": "Dengue warning sign", "source": "WHO, CDC"},
+    {"id": "R7", "if": ["fever", "dengue_signs"], "then": "dengue", "cf": 0.90, "priority": 30, "knowledge_type": "heuristic", "rationale": "High fever + ≥2 dengue symptoms", "source": "WHO"},
+    {"id": "R8", "if": ["chills", "sweating"], "then": "malaria_signs", "cf": 0.85, "priority": 30, "knowledge_type": "heuristic", "rationale": "Classic malaria paroxysm", "source": "WHO"},
+    {"id": "R9", "if": ["headache", "nausea_vomiting"], "then": "malaria_signs", "cf": 0.60, "priority": 30, "knowledge_type": "heuristic", "rationale": "Early malaria symptoms", "source": "WHO"},
+    {"id": "R10", "if": ["fever", "malaria_signs"], "then": "malaria", "cf": 0.90, "priority": 30, "knowledge_type": "heuristic", "rationale": "Fever + malaria signs", "source": "WHO"},
+    {"id": "R11", "if": ["fever", "fever_more_than_3_days"], "then": "prolonged_fever", "cf": 0.90, "priority": 20, "knowledge_type": "heuristic", "rationale": "Lecture heuristic: fever 3+ days → test for infection", "source": "Lecture heuristic"},
+    {"id": "R12", "if": ["abdominal_pain", "diarrhea_or_constipation"], "then": "typhoid_signs", "cf": 0.75, "priority": 20, "knowledge_type": "heuristic", "rationale": "Typhoid GI pattern", "source": "WHO"},
+    {"id": "R13", "if": ["prolonged_fever", "typhoid_signs"], "then": "typhoid", "cf": 0.85, "priority": 20, "knowledge_type": "heuristic", "rationale": "Prolonged high fever + GI symptoms", "source": "WHO"},
+    {"id": "R14", "if": ["cough", "body_aches"], "then": "flu_signs", "cf": 0.70, "priority": 20, "knowledge_type": "heuristic", "rationale": "Dry cough + muscle pain", "source": "WHO"},
+    {"id": "R15", "if": ["headache", "fatigue"], "then": "flu_signs", "cf": 0.50, "priority": 20, "knowledge_type": "heuristic", "rationale": "Headache + severe malaise", "source": "WHO"},
+    {"id": "R16", "if": ["fever", "flu_signs"], "then": "influenza", "cf": 0.85, "priority": 20, "knowledge_type": "heuristic", "rationale": "Sudden fever + flu signs; cf. CDC ILI definition", "source": "WHO"},
+    {"id": "R17", "if": ["runny_nose", "sneezing"], "then": "cold_signs", "cf": 0.80, "priority": 10, "knowledge_type": "heuristic", "rationale": "Typical cold pattern", "source": "CDC"},
+    {"id": "R18", "if": ["sore_throat"], "then": "cold_signs", "cf": 0.50, "priority": 10, "knowledge_type": "heuristic", "rationale": "Sore throat", "source": "CDC"},
+    {"id": "R19", "if": ["cold_signs"], "then": "common_cold", "cf": 0.80, "priority": 10, "knowledge_type": "heuristic", "rationale": "Most colds have no fever", "source": "CDC"}
+  ],
+  "red_flags": [
+    {"id": "RF1", "if": ["bleeding_gums"], "priority": 100, "message": "Bleeding gums or nose can be a warning sign of severe dengue. Seek emergency medical care now.", "knowledge_type": "factual", "source": "WHO, CDC"},
+    {"id": "RF2", "if": ["chest_pain", "shortness_of_breath"], "priority": 100, "message": "Chest pain with shortness of breath needs urgent assessment. Seek emergency medical care now.", "knowledge_type": "factual", "source": "WHO (pneumonia)"},
+    {"id": "RF3", "if": ["confusion"], "priority": 100, "message": "Confusion or reduced consciousness can signal a severe infection such as severe malaria. Seek emergency medical care now.", "knowledge_type": "factual", "source": "WHO (malaria, pneumonia)"}
+  ]
+}
