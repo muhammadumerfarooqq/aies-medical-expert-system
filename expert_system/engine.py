@@ -1,0 +1,407 @@
+"""Generic forward-chaining inference engine with MYCIN-style certainty factors.
+
+The engine contains NO medical knowledge: every symptom, disease, rule, CF and
+threshold is read from the knowledge base (data/knowledge_base.json).
+
+Termination: each cycle fires one rule, and a rule can fire again only when one
+of its premise CFs changed. kb_verify forbids cycles in the rule graph, so CFs
+settle after finitely many firings and the loop always reaches a fixed point.
+
+Run the demo / acceptance check with:  python -m expert_system.engine
+"""
+
+from __future__ import annotations
+
+import sys
+from dataclasses import asdict, dataclass, field
+from typing import Optional
+
+from expert_system.kb_verify import load_kb, verify_kb
+
+EPSILON = 1e-9  # tolerance for comparing floating-point CFs
+
+
+# ---------------------------------------------------------------- data classes
+
+@dataclass
+class Firing:
+    """One trace record: a single rule or red flag fired in one cycle."""
+    cycle: int
+    rule_id: str
+    kind: str                         # "diagnostic" or "red_flag"
+    conflict_set: list[str]           # rule ids, in conflict-resolution order
+    premises: dict[str, float]        # premise id -> its CF at firing time
+    min_premise_cf: float
+    rule_cf: Optional[float]          # None for red flags
+    contribution: Optional[float]     # rule_cf * min_premise_cf; None for red flags
+    concluded_fact: Optional[str]     # None for red flags
+    cf_before: Optional[float]        # fact CF before this firing
+    cf_after: Optional[float]         # fact CF after this firing
+    refire: bool                      # True if this rule had fired before
+
+
+@dataclass
+class DiseaseResult:
+    """A disease that passed the display threshold, with its explanation."""
+    disease_id: str
+    name: str
+    cf: float
+    percent: float                    # relative % among the shown diseases
+    severity: str
+    description: str
+    justification: list[str]          # indented lines: rules down to root symptoms
+    treatment: list[str]
+    prevention: list[str]
+    sources: list[str]
+
+
+@dataclass
+class DiagnosisResult:
+    """Everything the engine produces for one consultation."""
+    diseases: list[DiseaseResult] = field(default_factory=list)   # ranked
+    alerts: list[dict] = field(default_factory=list)              # red flags
+    unknown_symptoms: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    why_not: dict[str, list[str]] = field(default_factory=dict)   # not-shown diseases
+    disclaimer: str = ""
+    trace: list[Firing] = field(default_factory=list)
+    working_memory: dict[str, float] = field(default_factory=dict)
+
+    def to_dict(self) -> dict:
+        """Return the whole result as plain dicts/lists (for tests and the GUI)."""
+        return asdict(self)
+
+
+# ------------------------------------------------------------------- CF helpers
+
+def combine_cfs(contributions: list[float]) -> float:
+    """Combine rule contributions for one fact: CF = CF_old + c * (1 - CF_old)."""
+    cf = 0.0
+    for c in contributions:
+        cf = cf + c * (1.0 - cf)
+    return cf
+
+
+def value_to_cf(value, intensity_cf: dict[str, float]) -> Optional[float]:
+    """Convert a user value to a CF; 0.0 means absent ("no"), None means invalid."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value) if 0 < value <= 1 else None
+    if isinstance(value, str):
+        label = value.strip().lower()
+        if label == "no":
+            return 0.0
+        return intensity_cf.get(label)
+    return None
+
+
+def parse_input(kb: dict, symptoms: dict) -> tuple[dict[str, float], list[str], list[str]]:
+    """Validate user input; return (initial facts, unknown ids, warnings)."""
+    table = kb["meta"]["cf_conventions"]["intensity_cf"]
+    known = kb["symptoms"]
+    facts: dict[str, float] = {}
+    unknown: list[str] = []
+    warnings: list[str] = []
+    for sid, value in symptoms.items():
+        if sid not in known:
+            unknown.append(sid)
+            warnings.append(f"Unknown symptom '{sid}' was ignored.")
+            continue
+        cf = value_to_cf(value, table)
+        if cf is None:
+            warnings.append(f"Invalid value {value!r} for '{sid}' was ignored.")
+        elif cf > 0:
+            facts[sid] = cf
+    # A follow-up symptom only makes sense if its parent symptom is present.
+    for sid in list(facts):
+        parent = known[sid].get("ask_only_if")
+        if parent and parent not in facts:
+            del facts[sid]
+            warnings.append(f"'{sid}' ignored because '{parent}' was not reported.")
+    return facts, unknown, warnings
+
+
+def compute_depths(kb: dict) -> dict[str, int]:
+    """Rule depth = 1 + deepest rule concluding any of its premises (symptoms: 0)."""
+    by_conclusion: dict[str, list[dict]] = {}
+    for rule in kb["rules"]:
+        by_conclusion.setdefault(rule["then"], []).append(rule)
+    depths: dict[str, int] = {}
+
+    def depth_of(rule: dict) -> int:
+        """Memoised depth of one rule (recursion ends: the rule graph is acyclic)."""
+        if rule["id"] not in depths:
+            deepest = 0
+            for premise in rule["if"]:
+                for producer in by_conclusion.get(premise, []):
+                    deepest = max(deepest, depth_of(producer))
+            depths[rule["id"]] = 1 + deepest
+        return depths[rule["id"]]
+
+    for rule in kb["rules"] + kb["red_flags"]:
+        depth_of(rule)
+    return depths
+
+
+def is_eligible(previous: Optional[tuple], current: tuple) -> bool:
+    """Refraction: eligible if never fired, or a premise CF changed since."""
+    if previous is None:
+        return True
+    return any(abs(a - b) > EPSILON for a, b in zip(previous, current))
+
+
+# --------------------------------------------------------------- forward chaining
+
+def run_forward_chaining(kb: dict, initial: dict[str, float]):
+    """Run the recognize-act loop; return (memory, last_firing, contributions, trace, alerts)."""
+    threshold = kb["meta"]["cf_conventions"]["rule_fire_threshold"]
+    depths = compute_depths(kb)
+    items = [("diagnostic", r) for r in kb["rules"]] + [("red_flag", r) for r in kb["red_flags"]]
+    json_order = {rule["id"]: i for i, (_, rule) in enumerate(items)}
+
+    # STEP 1: start with the initial facts (working memory = {id: cf}).
+    memory: dict[str, float] = dict(initial)
+    contributions: dict[str, dict[str, float]] = {}   # fact -> {rule_id: contribution}
+    last_fired: dict[str, tuple] = {}                 # rule_id -> premise CFs when it fired
+    last_firing: dict[str, Firing] = {}               # rule_id -> its latest trace record
+    trace: list[Firing] = []
+    alerts: list[dict] = []
+
+    def resolution_key(entry):
+        """Sort key: priority high first, then shallow rules, then JSON order."""
+        rule = entry[1]
+        return (-rule["priority"], depths[rule["id"]], json_order[rule["id"]])
+
+    cycle = 0
+    while True:
+        # STEP 2: match - collect every rule/red flag that can fire now.
+        conflict = []
+        for kind, rule in items:
+            if any(p not in memory for p in rule["if"]):
+                continue
+            cfs = tuple(memory[p] for p in rule["if"])
+            if min(cfs) < threshold - EPSILON:
+                continue
+            if is_eligible(last_fired.get(rule["id"]), cfs):
+                conflict.append((kind, rule, cfs))
+
+        # STEP 5: stop at the fixed point (nothing left to fire).
+        if not conflict:
+            break
+
+        # STEP 3: conflict resolution - choose ONE rule.
+        conflict.sort(key=resolution_key)
+        kind, rule, cfs = conflict[0]
+        cycle += 1
+        premises = dict(zip(rule["if"], cfs))
+        min_cf = min(cfs)
+
+        # STEP 4: act - fire the chosen rule.
+        if kind == "diagnostic":
+            fact = rule["then"]
+            contribution = rule["cf"] * min_cf
+            before = memory.get(fact, 0.0)
+            # Replace this rule's old contribution (never count it twice).
+            contributions.setdefault(fact, {})[rule["id"]] = contribution
+            after = combine_cfs(list(contributions[fact].values()))
+            memory[fact] = after
+            firing = Firing(cycle, rule["id"], kind, [c[1]["id"] for c in conflict],
+                            premises, min_cf, rule["cf"], contribution, fact,
+                            before, after, rule["id"] in last_fired)
+        else:
+            # Red flag: record an alert only; no fact is added.
+            alerts.append({"id": rule["id"], "message": rule["message"],
+                           "source": rule.get("source", ""), "symptoms": premises})
+            firing = Firing(cycle, rule["id"], kind, [c[1]["id"] for c in conflict],
+                            premises, min_cf, None, None, None, None, None, False)
+        last_fired[rule["id"]] = cfs
+        last_firing[rule["id"]] = firing
+        trace.append(firing)
+    return memory, last_firing, contributions, trace, alerts
+
+
+# ------------------------------------------------------------------ explanations
+
+def explain_fact(fact: str, memory: dict, contributions: dict,
+                 last_firing: dict, indent: int = 0) -> list[str]:
+    """Justify a fact: its supporting rules, expanded down to root symptoms."""
+    pad = "  " * indent
+    rule_ids = list(contributions.get(fact, {}))
+    header = f"{pad}{fact}: CF {memory[fact]:.4f}"
+    if len(rule_ids) > 1:
+        parts = ", ".join(f"{r} {contributions[fact][r]:.4f}" for r in rule_ids)
+        header += f" (combined from {len(rule_ids)} rules: {parts})"
+    lines = [header]
+    for rid in rule_ids:
+        f = last_firing[rid]
+        prem = ", ".join(f"{p} {cf:.3f}" for p, cf in f.premises.items())
+        lines.append(f"{pad}  {rid} [{prem}] -> min {f.min_premise_cf:.3f} x "
+                     f"rule CF {f.rule_cf:.2f} = {f.contribution:.4f}")
+        for premise in f.premises:
+            if premise in contributions:
+                lines.extend(explain_fact(premise, memory, contributions,
+                                          last_firing, indent + 2))
+    return lines
+
+
+def why_not_fact(kb: dict, fact: str, memory: dict, indent: int = 0) -> list[str]:
+    """Explain a missing fact: for each rule that could conclude it, what is present/missing."""
+    pad = "  " * indent
+    lines: list[str] = []
+    for rule in kb["rules"]:
+        if rule["then"] != fact:
+            continue
+        lines.append(f"{pad}{rule['id']} needs {', '.join(rule['if'])}")
+        for premise in rule["if"]:
+            if premise in memory:
+                lines.append(f"{pad}  {premise}: present (CF {memory[premise]:.3f})")
+            elif premise in kb["symptoms"]:
+                lines.append(f"{pad}  {premise}: missing")
+            else:
+                lines.append(f"{pad}  {premise}: not derived")
+                lines.extend(why_not_fact(kb, premise, memory, indent + 2))
+    return lines
+
+
+# ----------------------------------------------------------------------- diagnose
+
+def diagnose(kb: dict, symptoms: dict) -> DiagnosisResult:
+    """Run a full consultation: validate input, forward-chain, rank and explain."""
+    conv = kb["meta"]["cf_conventions"]
+    initial, unknown, warnings = parse_input(kb, symptoms)
+    memory, last_firing, contributions, trace, alerts = run_forward_chaining(kb, initial)
+
+    # Diseases reaching the display threshold, ranked severity first, then CF.
+    shown = [d for d in kb["diseases"]
+             if memory.get(d, 0.0) >= conv["display_threshold"] - EPSILON]
+    rank = kb["meta"]["severity_rank"]
+    shown.sort(key=lambda d: (-rank[kb["diseases"][d]["severity"]],
+                              -round(memory[d], 9), kb["diseases"][d]["name"]))
+    total = sum(memory[d] for d in shown)
+
+    result = DiagnosisResult(alerts=alerts, unknown_symptoms=unknown, warnings=warnings,
+                             disclaimer=kb["meta"]["disclaimer"], trace=trace,
+                             working_memory=dict(memory))
+    for did in shown:
+        info = kb["diseases"][did]
+        result.diseases.append(DiseaseResult(
+            did, info["name"], memory[did], memory[did] / total * 100, info["severity"],
+            info["description"], explain_fact(did, memory, contributions, last_firing),
+            info["treatment"], info["prevention"], info["sources"]))
+
+    # "Why not" for every disease that was not shown.
+    for did in kb["diseases"]:
+        if did in shown:
+            continue
+        if memory.get(did, 0.0) > 0:
+            result.why_not[did] = [f"CF {memory[did]:.4f} is below the display "
+                                   f"threshold {conv['display_threshold']}"]
+        else:
+            result.why_not[did] = why_not_fact(kb, did, memory)
+    return result
+
+
+# ------------------------------------------------------------------- demo (Checkpoint A)
+
+CASES = [
+    {"name": "A: severe + mild together",
+     "input": {"fever": "moderate", "rash": "yes", "pain_behind_eyes": "moderate",
+               "runny_nose": "moderate", "sneezing": "moderate", "sore_throat": "moderate"},
+     "shown": [("dengue", 0.5355), ("common_cold", 0.5712)], "percents": [48.4, 51.6],
+     "alerts": [], "unknown": []},
+    {"name": "B: close case (dengue vs malaria)",
+     "input": {"fever": "moderate", "headache": "moderate", "nausea_vomiting": "moderate",
+               "body_aches": "moderate"},
+     "shown": [("dengue", 0.378), ("malaria", 0.378)], "alerts": [], "unknown": [],
+     "extra": [("influenza not concluded", lambda r: "influenza" not in r.working_memory)]},
+    {"name": "C: pneumonia + red flag",
+     "input": {"fever": "moderate", "cough": "moderate", "shortness_of_breath": "moderate",
+               "chest_pain": "moderate"},
+     "shown": [("pneumonia", 0.595)], "alerts": ["RF2"], "unknown": [],
+     "extra": [("RF2 fired in cycle 1",
+                lambda r: r.trace[0].rule_id == "RF2" and r.trace[0].cycle == 1)]},
+    {"name": "D: B plus bleeding gums",
+     "input": {"fever": "moderate", "headache": "moderate", "nausea_vomiting": "moderate",
+               "body_aches": "moderate", "bleeding_gums": "yes"},
+     "shown": [("dengue", 0.630), ("malaria", 0.378)], "alerts": ["RF1"], "unknown": []},
+    {"name": "E: fever only",
+     "input": {"fever": "moderate"}, "shown": [], "alerts": [], "unknown": []},
+    {"name": "F: fever + unknown symptom",
+     "input": {"fever": "moderate", "itching": "moderate"},
+     "shown": [], "alerts": [], "unknown": ["itching"]},
+    {"name": "G: follow-up symptom without fever",
+     "input": {"fever_more_than_3_days": "yes"}, "shown": [], "alerts": [], "unknown": [],
+     "extra": [("warning reported", lambda r: len(r.warnings) == 1)]},
+]
+
+
+def check_case(case: dict, result: DiagnosisResult) -> list[str]:
+    """Compare a result with the expected values; return a list of failure messages."""
+    problems = []
+    got = [(d.disease_id, d.cf) for d in result.diseases]
+    if [g[0] for g in got] != [e[0] for e in case["shown"]]:
+        problems.append(f"shown diseases {[g[0] for g in got]} != {[e[0] for e in case['shown']]}")
+    else:
+        for (did, cf), (_, expected) in zip(got, case["shown"]):
+            if abs(cf - expected) > 0.001:
+                problems.append(f"{did} CF {cf:.4f} != {expected}")
+    for d, expected in zip(result.diseases, case.get("percents", [])):
+        if abs(d.percent - expected) > 0.05:
+            problems.append(f"{d.disease_id} percent {d.percent:.1f} != {expected}")
+    if [a["id"] for a in result.alerts] != case["alerts"]:
+        problems.append(f"alerts {[a['id'] for a in result.alerts]} != {case['alerts']}")
+    if result.unknown_symptoms != case["unknown"]:
+        problems.append(f"unknown {result.unknown_symptoms} != {case['unknown']}")
+    for label, test in case.get("extra", []):
+        if not test(result):
+            problems.append(f"check failed: {label}")
+    return problems
+
+
+def print_result(result: DiagnosisResult) -> None:
+    """Print shown diseases, alerts, unknown symptoms, warnings and the trace."""
+    for a in result.alerts:
+        print(f"  ALERT {a['id']}: {a['message']}")
+    if not result.diseases:
+        print("  No disease reached the display threshold.")
+    for i, d in enumerate(result.diseases, 1):
+        print(f"  {i}. {d.name}: CF {d.cf:.2f} ({d.cf:.4f}), {d.percent:.1f}%, {d.severity}")
+    if result.unknown_symptoms:
+        print(f"  Unknown symptoms: {', '.join(result.unknown_symptoms)}")
+    for w in result.warnings:
+        print(f"  Warning: {w}")
+    for f in result.trace:
+        conflict = ", ".join(f.conflict_set)
+        if f.kind == "red_flag":
+            action = f"{f.rule_id} -> ALERT"
+        else:
+            action = (f"{f.rule_id} -> {f.concluded_fact} "
+                      f"{f.cf_before:.3f} -> {f.cf_after:.3f}"
+                      + (" (re-fire)" if f.refire else ""))
+        print(f"    cycle {f.cycle}: [{conflict}] fired {action}")
+
+
+def main() -> int:
+    """Load + verify the KB, run the acceptance cases, print PASS/FAIL for each."""
+    kb = load_kb()
+    ok, errors, _ = verify_kb(kb)
+    if not ok:
+        for error in errors:
+            print(f"ERROR: {error}")
+        return 1
+    failures = 0
+    for case in CASES:
+        result = diagnose(kb, case["input"])
+        problems = check_case(case, result)
+        print(f"Case {case['name']}: {'PASS' if not problems else 'FAIL'}")
+        print_result(result)
+        for p in problems:
+            print(f"  !! {p}")
+        failures += bool(problems)
+    print(f"Checkpoint A: {len(CASES) - failures}/{len(CASES)} cases passed")
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
