@@ -1,6 +1,6 @@
 """Test runner: python run_tests.py [--verbose]
 
-Seven sections, each printed as an ASCII table:
+Eight sections, each printed as an ASCII table:
   [1] KB verification            - the knowledge base passes all 8 consistency checks
   [2] Clinical cases             - cases written from WHO/CDC descriptions (tests/cases.json)
   [3] Regression                 - exact CFs from the design check (tests/regression.json)
@@ -8,6 +8,7 @@ Seven sections, each printed as an ASCII table:
   [5] Verifier self-tests        - the verifier catches deliberately broken KBs (in memory only)
   [6] Order independence         - shuffling rule order never changes the result
   [7] Hybrid backward chaining   - questions are generated from rules and settle close calls
+  [8] GUI smoke tests            - app.py runs headless (skipped if streamlit is not installed)
 
 A failing test is a finding about the knowledge base, not something to hide.
 Exit code is 1 if anything fails.
@@ -99,6 +100,10 @@ def check_expect(expect: dict, result: DiagnosisResult) -> list[str]:
     for name in expect.get("below_threshold_include", []):
         if name not in weak:
             problems.append(f"{name} should be below threshold but is not (below: {weak})")
+    missing = [m["symptom_id"] for m in result.missing_required]
+    for name in expect.get("missing_required_include", []):
+        if name not in missing:
+            problems.append(f"{name} should be reported as a missing required symptom (got {missing})")
     if expect.get("warning") and not result.warnings:
         problems.append("a warning was expected but none was given")
     return problems
@@ -373,6 +378,70 @@ def section_hybrid(kb: dict):
     return rows, passed, 8, []
 
 
+# ------------------------------------------------------------- [8] GUI smoke tests
+
+def page_text(at) -> str:
+    """All visible text of a headless Streamlit page (markdown, warnings, expanders, metrics)."""
+    parts = [m.value for m in at.markdown] + [w.value for w in at.warning]
+    parts += [e.label for e in at.expander] + [f"{m.label} {m.value}" for m in at.metric]
+    return " | ".join(parts)
+
+
+def section_gui(kb: dict):
+    """Run app.py headless with streamlit's AppTest; None if streamlit is missing."""
+    try:
+        from streamlit.testing.v1 import AppTest
+    except ImportError:
+        return None
+    import logging
+    logging.getLogger("streamlit").setLevel(logging.ERROR)
+
+    def fresh():
+        """A new headless run of app.py."""
+        return AppTest.from_file(str(ROOT / "app.py"), default_timeout=60).run()
+
+    rows, passed = [], 0
+
+    def add(case_id: str, name: str, expected: str, actual: str, problems: list[str]) -> None:
+        """Record one row and count it if it passed."""
+        nonlocal passed
+        rows.append([case_id, name, expected, actual, pass_fail(problems)])
+        passed += not problems
+
+    at = fresh()
+    add("G1", "App loads", "no exception", f"{len(at.exception)} exceptions",
+        [str(e.value) for e in at.exception])
+
+    at = fresh()
+    at.selectbox(key="example").select("T01 Dengue").run()
+    at.button(key="diagnose").click().run()
+    text = page_text(at)
+    problems = [str(e.value) for e in at.exception]
+    if "Dengue (" not in text:
+        problems.append("Dengue not shown")
+    add("G2", "T01 example + Diagnose", "Dengue shown", "Dengue shown" if not problems else "see below", problems)
+
+    at = fresh()
+    at.multiselect(key="chosen").set_value(
+        ["fever", "headache", "nausea_vomiting", "body_aches"]).run()
+    at.button(key="diagnose").click().run()
+    text = page_text(at)
+    problems = [str(e.value) for e in at.exception]
+    if not any("Close call" in w.value for w in at.warning):
+        problems.append("no close-call warning")
+    if "Why I'm asking" not in text or "Bleeding gums or nose" not in text:
+        problems.append("first question should mention Bleeding gums or nose")
+    add("G3", "Close case + Diagnose", "close-call warning; first question about bleeding gums",
+        "ok" if not problems else "see below", problems)
+
+    at = fresh()
+    rules = [m.value for m in at.metric if m.label == "Rules"]
+    expected = str(len(kb["rules"]) + len(kb["red_flags"]))
+    problems = [] if rules == [expected] else [f"Rules metric {rules}, expected {expected}"]
+    add("G4", "Knowledge base tab", f"{expected} rules", f"{rules}", problems)
+    return rows, passed, 4, []
+
+
 # ------------------------------------------------------------------------- main
 
 def print_section(title: str, headers: list[str], rows: list[list[str]], failures: list,
@@ -390,7 +459,7 @@ def print_section(title: str, headers: list[str], rows: list[list[str]], failure
 
 
 def main() -> int:
-    """Run all seven sections and print the summary; return the exit code."""
+    """Run all eight sections and print the summary; return the exit code."""
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description="Run the expert system tests")
     parser.add_argument("--verbose", action="store_true", help="print full diagnosis of failing cases")
@@ -417,9 +486,15 @@ def main() -> int:
         ("[5] Verifier self-tests", ["Test", "Expected", "Actual", "Result"], section_verifier),
         ("[6] Order independence", ["Shuffles", "Cases", "Outcome", "Result"], section_order),
         ("[7] Hybrid backward chaining", ["ID", "Case", "Expected", "Actual", "Result"], section_hybrid),
+        ("[8] GUI smoke tests", ["ID", "Case", "Expected", "Actual", "Result"], section_gui),
     ]
     for title, headers, function in sections:
-        rows, passed, total, failures = function(kb)
+        outcome = function(kb)
+        if outcome is None:
+            print()
+            print(f"{title.split(' ', 1)[0]} skipped (streamlit not installed)")
+            continue
+        rows, passed, total, failures = outcome
         print_section(title, headers, rows, failures, kb, verbose)
         summary.append((title, passed, total))
 

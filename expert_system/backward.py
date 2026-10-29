@@ -165,6 +165,50 @@ def find_questions(kb: dict, result: DiagnosisResult, symptoms: dict,
     return questions
 
 
+def next_step(kb: dict, result: DiagnosisResult, known: dict, denied: set[str],
+              asked: int, max_questions: int = MAX_QUESTIONS) -> tuple[Optional[Question], Optional[str]]:
+    """Decide what happens next: (question, None) to ask, or (None, outcome) to stop.
+
+    Shared by run_session (CLI, tests) and the GUI so both follow the same rules.
+    """
+    if close_call(result) is None:
+        return None, "separated"
+    if asked >= max_questions:
+        return None, "max_questions"
+    questions = find_questions(kb, result, known, denied)
+    if not questions:
+        return None, "no_more_questions"
+    return questions[0], None
+
+
+def apply_answer(kb: dict, known: dict, denied: set[str], question: Question, answer: str) -> Step:
+    """Record one answer ('no' denies the symptom, anything else is added), re-run forward chaining.
+
+    known and denied are updated in place; the returned Step holds the new result.
+    """
+    if answer == "no":
+        denied.add(question.symptom_id)
+    else:
+        known[question.symptom_id] = answer
+    result = diagnose(kb, known)
+    return Step(question, answer, result, top_two_gap(result))
+
+
+def rules_supporting(kb: dict, goal: str) -> list[dict]:
+    """All rules that can feed a goal, directly or through intermediate facts (KB order)."""
+    wanted = {goal}
+    changed = True
+    while changed:
+        changed = False
+        for rule in kb["rules"]:
+            if rule["then"] in wanted:
+                for premise in rule["if"]:
+                    if premise not in kb["symptoms"] and premise not in wanted:
+                        wanted.add(premise)
+                        changed = True
+    return [rule for rule in kb["rules"] if rule["then"] in wanted]
+
+
 def run_session(kb: dict, symptoms: dict, answer_fn: Callable[[Question], Optional[str]],
                 max_questions: int = MAX_QUESTIONS,
                 on_step: Optional[Callable[[Step], None]] = None) -> HybridResult:
@@ -183,27 +227,15 @@ def run_session(kb: dict, symptoms: dict, answer_fn: Callable[[Question], Option
         return HybridResult(initial, steps, result, "not_close", known)
 
     while True:
-        if close_call(result) is None:
-            outcome = "separated"
+        question, outcome = next_step(kb, result, known, denied, len(steps), max_questions)
+        if question is None:
             break
-        if len(steps) >= max_questions:
-            outcome = "max_questions"
-            break
-        questions = find_questions(kb, result, known, denied)
-        if not questions:
-            outcome = "no_more_questions"
-            break
-        question = questions[0]
         answer = answer_fn(question)
         if answer is None:
             outcome = "stopped"
             break
-        if answer == "no":
-            denied.add(question.symptom_id)
-        else:
-            known[question.symptom_id] = answer
-        result = diagnose(kb, known)
-        step = Step(question, answer, result, top_two_gap(result))
+        step = apply_answer(kb, known, denied, question, answer)
+        result = step.result_after
         steps.append(step)
         if on_step is not None:
             on_step(step)

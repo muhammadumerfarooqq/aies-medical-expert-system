@@ -10,6 +10,7 @@ Artificial Intelligence & Expert Systems (AIES), Fall 2026, NED University
 
 ```
 AIES-CCP/
+├── app.py                   # Streamlit GUI (presentation only)
 ├── main.py                  # Entry point: verifies the KB, then starts the CLI
 ├── expert_system/
 │   ├── __init__.py          # Package marker for the engine code
@@ -21,15 +22,16 @@ AIES-CCP/
 │   └── knowledge_base.json  # The knowledge base: symptoms, diseases, rules, red flags
 ├── run_tests.py             # Test runner: python run_tests.py [--verbose]
 ├── tests/
-│   ├── cases.json           # 13 clinical test cases written from WHO/CDC descriptions
+│   ├── cases.json           # 14 clinical test cases written from WHO/CDC descriptions
 │   └── regression.json      # 7 regression cases with exact expected CFs
 ├── docs/
 │   ├── kb_design.md         # Design document: source of truth for the KB
 │   ├── diagrams/.gitkeep    # Architecture and flow diagrams for the report
 │   └── screenshots/.gitkeep # Screenshots of the running system for the report
+├── .streamlit/config.toml   # GUI theme (no secrets; secrets.toml is git-ignored)
 ├── .gitignore               # Keeps caches, virtual envs, secrets and temp files out of git
 ├── .gitattributes           # Line-ending rules (LF for Python files)
-├── requirements.txt         # Dependencies (none yet; standard library only)
+├── requirements.txt         # streamlit (GUI only); everything else is standard library
 └── README.md                # This file
 ```
 
@@ -123,7 +125,7 @@ Symptoms can be separated by commas, "and", "aur", "&" or "+" (for example `bukh
 
 **Synonyms:** each symptom in the KB lists English and Roman Urdu synonyms (`bukhar`, `khansi`, `zukam`, `ulti`, `pait dard`, `kamzori`, ...). Adding a synonym to the JSON makes it work in the CLI with no code change.
 
-**Result format** (same in both modes): red-flag alerts first (framed with `!` lines and an `EMERGENCY:` prefix), the recognised symptoms, a ranked table (rank, disease, severity, confidence %, CF), then for each disease its description, the reasoning ("Why this was suggested"), treatment, prevention and sources. Unknown symptoms and warnings follow. If no disease reaches the confidence threshold (30%, from the KB) the CLI says there is not enough evidence. The disclaimer is always last.
+**Result format** (same in both modes): red-flag alerts first (framed with `!` lines and an `EMERGENCY:` prefix), the recognised symptoms, a ranked table (rank, disease, severity, confidence %, CF), then for each disease its description, the reasoning ("Why this was suggested"), treatment, prevention and sources. Unknown symptoms and warnings follow. If no disease reaches the confidence threshold (30%, from the KB) the CLI says there is not enough evidence, plus a hint when a required symptom was not reported (for example, fever is required by several diseases in this KB). The disclaimer is always last.
 
 ## Testing
 
@@ -131,7 +133,7 @@ Symptoms can be separated by commas, "and", "aur", "&" or "+" (for example `bukh
 python run_tests.py            # add --verbose to print the full diagnosis of failing cases
 ```
 
-The runner prints seven sections as tables, a summary, and `TOTAL: x/y passed`. The exit code is 1 if anything fails.
+The runner prints eight sections as tables, a summary, and `TOTAL: x/y passed`. The exit code is 1 if anything fails.
 
 | Section | What it proves |
 |---|---|
@@ -142,6 +144,7 @@ The runner prints seven sections as tables, a summary, and `TOTAL: x/y passed`. 
 | [5] Verifier self-tests | deliberately broken copies of the KB (kept in memory only) are caught by `kb_verify` |
 | [6] Order independence | shuffling the order of rules and red flags (50 fixed seeds) never changes any CF |
 | [7] Hybrid backward chaining | close calls are detected, questions are generated from the rules in the right order, scripted answers separate the diseases, no symptom is asked twice, and `backward.py` contains no disease or symptom names |
+| [8] GUI smoke tests | `app.py` loads without errors, the T01 example gives Dengue, a close case shows the close-call warning and a bleeding-gums question, and the knowledge base tab shows 23 rules (skipped if streamlit is not installed) |
 
 A failing clinical case is a finding about the knowledge base, not a reason to edit the test.
 
@@ -187,6 +190,29 @@ python main.py --symptoms "fever, headache, ulti, badan dard"
 python main.py --symptoms "fever, headache, ulti, badan dard" --answers "bleeding gums:yes"
 ```
 
+## Graphical interface
+
+The GUI is optional and needs Python 3.11+ (the engine, CLI and tests run on 3.10+ with no installs).
+
+```
+pip install -r requirements.txt
+python -m streamlit run app.py
+```
+
+`app.py` is presentation only: all reasoning, ranking, symptom matching and text come from the `expert_system` package and the knowledge base.
+
+| Tab | What it shows |
+|---|---|
+| Diagnosis | Example cases, symptom picker, free-text input (English or Roman Urdu, with "Did you mean?"), intensity controls and follow-up questions. Results: red-flag alerts first, the ranked table with confidence bars and severity badges, the backward-chaining panel (one question at a time when two diseases are close), and an expander per disease with its justification, treatment, prevention and sources |
+| Reasoning trace | One row per forward-chaining cycle: conflict set, fired rule, concluded fact, CF before and after, re-fire |
+| Why not | Why each disease that was not shown was ruled out |
+| Backward chaining | The questions asked, why they were asked, the answers, and the ranking after each |
+| Knowledge base | Counts, rules (filterable by disease), diseases, symptoms and red flags |
+
+When no disease is shown, the Diagnosis tab shows the same required-symptom hint as the CLI.
+
+The GUI is covered by headless smoke tests (section [8] of `python run_tests.py`); they are skipped automatically if streamlit is not installed.
+
 ## Progress
 
 - [x] Phase 0: Setup
@@ -195,7 +221,7 @@ python main.py --symptoms "fever, headache, ulti, badan dard" --answers "bleedin
 - [x] Phase 3: CLI
 - [x] Phase 4: Tests
 - [x] Phase 5: Hybrid Backward Chaining
-- [ ] Phase 6: Streamlit GUI
+- [x] Phase 6: Streamlit GUI
 - [ ] Phase 7: Screenshots
 - [ ] Phase 8: Report & Title Page
 - [ ] Phase 9: Review & Submission

@@ -123,6 +123,38 @@ def print_table(headers: list[str], rows: list[list[str]]) -> None:
         print("  " + " | ".join(c.ljust(w) for c, w in zip(row, widths)))
 
 
+SAFETY_NOTE = ("Note: severe diseases are listed first even when a milder disease "
+               "has higher confidence (safety-first ranking).")
+
+
+def no_diagnosis_message(kb: dict) -> str:
+    """Message shown when no disease reaches the display threshold."""
+    percent = round(kb["meta"]["cf_conventions"]["display_threshold"] * 100)
+    return (f"No disease reached the {percent}% confidence threshold. "
+            "Not enough evidence for a diagnosis.")
+
+
+def join_names(names: list[str]) -> str:
+    """'A, B and C' style list."""
+    if len(names) <= 1:
+        return "".join(names)
+    return ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def required_hints(result: DiagnosisResult) -> list[str]:
+    """Hint lines for required symptoms that were not reported (used when nothing is shown)."""
+    return [f"Hint: {m['label']} was not reported. In this knowledge base it is a required "
+            f"condition for {join_names(m['diseases'])}." for m in result.missing_required]
+
+
+def below_threshold_text(result: DiagnosisResult) -> str:
+    """'Below threshold ...' line, or '' when there are no weak candidates."""
+    if not result.below_threshold:
+        return ""
+    weak = ", ".join(f"{b['name']} (CF {fmt(b['cf'], 3)})" for b in result.below_threshold)
+    return f"Below threshold (not enough evidence): {weak}"
+
+
 def severity_outranks_confidence(result: DiagnosisResult) -> bool:
     """True if some disease is ranked below another one that has a lower CF."""
     diseases = result.diseases
@@ -134,9 +166,12 @@ def severity_outranks_confidence(result: DiagnosisResult) -> bool:
 
 
 def print_result(kb: dict, result: DiagnosisResult, accepted: dict[str, str],
-                 notes: list[str], color: bool) -> None:
-    """Print the full result: alerts, symptoms, ranked diseases, details, notes, disclaimer."""
-    conv = kb["meta"]["cf_conventions"]
+                 notes: list[str], color: bool, compact: bool = False) -> None:
+    """Print the result: alerts, symptoms, ranked diseases, details, notes, disclaimer.
+
+    compact=True stops after the ranking (alerts + table); used for the first pass
+    of a hybrid consultation, before the full final result is printed.
+    """
     print()
     print(paint("=" * LINE_WIDTH + "\n RESULT\n" + "=" * LINE_WIDTH, "1;36", color))
 
@@ -158,16 +193,16 @@ def print_result(kb: dict, result: DiagnosisResult, accepted: dict[str, str],
                 for i, d in enumerate(result.diseases, 1)]
         print_table(["Rank", "Disease", "Severity", "Confidence %", "CF"], rows)
         if severity_outranks_confidence(result):
-            print("Note: severe diseases are listed first even when a milder disease "
-                  "has higher confidence (safety-first ranking).")
+            print(SAFETY_NOTE)
     else:
-        percent = round(conv["display_threshold"] * 100)
-        print(f"\nNo disease reached the {percent}% confidence threshold. "
-              "Not enough evidence for a diagnosis.")
+        print("\n" + no_diagnosis_message(kb))
+        for hint in required_hints(result):
+            print(textwrap.fill(hint, width=LINE_WIDTH))
 
     if result.below_threshold:
-        weak = ", ".join(f"{b['name']} (CF {fmt(b['cf'], 3)})" for b in result.below_threshold)
-        print(f"Below threshold (not enough evidence): {weak}")
+        print(below_threshold_text(result))
+    if compact:
+        return
 
     # 4. Details per disease.
     for i, d in enumerate(result.diseases, 1):
@@ -339,7 +374,8 @@ def run_once(kb: dict, args: argparse.Namespace, color: bool) -> int:
     """Non-interactive consultation from --symptoms (and optional --answers)."""
     accepted, problems = parse_symptom_arg(kb, args.symptoms)
     result = diagnose(kb, accepted)
-    print_result(kb, result, accepted, problems, color)
+    hybrid_follows = close_call(result) is not None and args.answers is not None
+    print_result(kb, result, accepted, problems, color, compact=hybrid_follows)
     if close_call(result) is not None:
         if args.answers is None:
             print_would_ask(kb, result, accepted, color)
@@ -356,9 +392,8 @@ def run_once(kb: dict, args: argparse.Namespace, color: bool) -> int:
 
             hybrid = run_session(kb, accepted, answer_fn, on_step=print_updated_ranking)
             print("\nOutcome: " + OUTCOME_TEXT[hybrid.outcome])
-            if hybrid.steps:
-                result = hybrid.final_result
-                print_result(kb, result, hybrid.final_symptoms, problems + answer_problems, color)
+            result = hybrid.final_result
+            print_result(kb, result, hybrid.final_symptoms, problems + answer_problems, color)
     elif args.answers is not None:
         print("\nNote: --answers ignored because no close call needed backward chaining.")
     if args.trace:
@@ -395,7 +430,7 @@ def ask_intensity(kb: dict, label: str) -> str:
     default = "moderate" if "moderate" in levels else levels[len(levels) // 2]
     options = " ".join(f"[{i}] {name}" for i, name in enumerate(levels, 1))
     while True:
-        answer = ask(f"How severe is your {label.lower()}? {options} (Enter = {default}): ").lower()
+        answer = ask(f"How severe is this symptom: {label}? {options} (Enter = {default}): ").lower()
         if answer == "":
             return default
         if answer.isdigit() and 1 <= int(answer) <= len(levels):
@@ -495,13 +530,13 @@ def run_interactive(kb: dict, color: bool) -> int:
                 continue
             break
         result = diagnose(kb, accepted)
-        print_result(kb, result, accepted, notes, color)
         hybrid = None
-        if close_call(result) is not None:
+        is_close = close_call(result) is not None
+        print_result(kb, result, accepted, notes, color, compact=is_close)
+        if is_close:
             hybrid = interactive_hybrid(kb, accepted, result, color)
-            if hybrid.steps:
-                result = hybrid.final_result
-                print_result(kb, result, hybrid.final_symptoms, notes, color)
+            result = hybrid.final_result
+            print_result(kb, result, hybrid.final_symptoms, notes, color)
         if not consultation_menu(kb, result, hybrid):
             break
     print("Goodbye.")

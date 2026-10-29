@@ -76,5 +76,11 @@
     "source": "Edge case: evidence just below the display threshold is reported as such",
     "input": {"fever": "severe", "chest_pain": "moderate"},
     "expect": {"none_shown": true, "below_threshold_include": ["pneumonia"]}
+  },
+  {
+    "id": "T14", "name": "Edge: many severe symptoms but no fever",
+    "source": "Edge case: in this KB fever is a required condition for every febrile disease, so no diagnosis, but red flags still fire and the missing fever is reported",
+    "input": {"diarrhea_or_constipation": "severe", "pain_behind_eyes": "severe", "bleeding_gums": "yes", "nausea_vomiting": "severe", "abdominal_pain": "severe", "shortness_of_breath": "severe", "chest_pain": "severe", "confusion": "yes", "runny_nose": "severe", "cough": "severe", "headache": "severe"},
+    "expect": {"none_shown": true, "alerts": ["RF1", "RF2", "RF3"], "missing_required_include": ["fever"]}
   }
 ]

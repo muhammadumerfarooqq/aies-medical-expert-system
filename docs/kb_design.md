@@ -204,6 +204,7 @@ Overcounting check (constraint 6): **PASS** for all 23 rules.
 4. Only positive (confirming) evidence is modelled; a symptom cannot lower a disease's CF (e.g., high fever does not reduce the likelihood of a cold).
 5. `fever_more_than_3_days` is only asked after the user reports fever.
 6. Symptoms not in the knowledge base are reported to the user and ignored.
+7. Fever is a required (gate) condition for all febrile diseases, following WHO definitions; afebrile presentations (e.g. pneumonia in older adults) are not covered.
 
 ---
 

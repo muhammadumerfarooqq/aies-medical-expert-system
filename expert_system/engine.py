@@ -66,6 +66,8 @@ class DiagnosisResult:
     working_memory: dict[str, float] = field(default_factory=dict)
     # Diseases with 0 < CF < display threshold: {"disease_id", "name", "cf"}, best first.
     below_threshold: list[dict] = field(default_factory=list)
+    # Unreported symptoms that block 2+ diseases: {"symptom_id", "label", "diseases": [names]}.
+    missing_required: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         """Return the whole result as plain dicts/lists (for tests and the GUI)."""
@@ -84,6 +86,39 @@ def fmt(x: float, dp: int) -> str:
     """
     exact = Decimal(str(round(x, 9)))
     return str(exact.quantize(Decimal(1).scaleb(-dp), rounding=ROUND_HALF_UP))
+
+
+def required_symptoms(kb: dict) -> dict[str, set[str]]:
+    """For each disease, the root symptoms that EVERY derivation path needs.
+
+    required(symptom) = {symptom}
+    required(rule)    = union of required(premise) over the rule's IF premises
+    required(fact or disease) = INTERSECTION of required(rule) over all rules
+                                concluding it (any one rule may be used, so only
+                                what all of them share is truly required).
+
+    Example: A <- r1 [x, y], A <- r2 [x, z]  gives required(A) = {x}.
+    """
+    by_conclusion: dict[str, list[dict]] = {}
+    for rule in kb["rules"]:
+        by_conclusion.setdefault(rule["then"], []).append(rule)
+    memo: dict[str, set[str]] = {}
+
+    def required_for(item: str) -> set[str]:
+        """Required root symptoms of one symptom, fact or disease (memoised)."""
+        if item in kb["symptoms"]:
+            return {item}
+        if item not in memo:
+            per_rule = []
+            for rule in by_conclusion.get(item, []):
+                needed: set[str] = set()
+                for premise in rule["if"]:
+                    needed |= required_for(premise)
+                per_rule.append(needed)
+            memo[item] = set.intersection(*per_rule) if per_rule else set()
+        return memo[item]
+
+    return {disease: required_for(disease) for disease in kb["diseases"]}
 
 
 def combine_cfs(contributions: list[float]) -> float:
@@ -329,6 +364,21 @@ def diagnose(kb: dict, symptoms: dict) -> DiagnosisResult:
         else:
             result.why_not[did] = why_not_fact(kb, did, memory)
     result.below_threshold.sort(key=lambda item: -item["cf"])
+
+    # Required symptoms that were not reported and block 2+ diseases (explanation only).
+    # Only when the user reported something: with no input there is nothing to hint about.
+    needs = required_symptoms(kb)
+    blocked: dict[str, list[str]] = {}
+    for did in kb["diseases"]:
+        if initial and did not in shown:
+            for sid in needs[did]:
+                if sid not in initial:
+                    blocked.setdefault(sid, []).append(did)
+    for sid, dids in blocked.items():
+        if len(dids) >= 2:
+            result.missing_required.append({
+                "symptom_id": sid, "label": kb["symptoms"][sid]["label"],
+                "diseases": [kb["diseases"][d]["name"] for d in dids]})
     return result
 
 

@@ -1,2 +1,3 @@
-# Engine, knowledge base and CLI use only the Python standard library.
-# streamlit will be added in Phase 6 only if the GUI is built.
+# Engine, knowledge base, CLI and tests use only the Python standard library.
+# streamlit is needed ONLY for the GUI (app.py); the engine, CLI and tests need nothing.
+streamlit==1.66.1
