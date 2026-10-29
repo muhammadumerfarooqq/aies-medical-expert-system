@@ -163,6 +163,10 @@ def print_result(kb: dict, result: DiagnosisResult, accepted: dict[str, str],
         print(f"\nNo disease reached the {percent}% confidence threshold. "
               "Not enough evidence for a diagnosis.")
 
+    if result.below_threshold:
+        weak = ", ".join(f"{b['name']} (CF {fmt(b['cf'], 3)})" for b in result.below_threshold)
+        print(f"Below threshold (not enough evidence): {weak}")
+
     # 4. Details per disease.
     for i, d in enumerate(result.diseases, 1):
         print(paint(f"\n--- {i}. {d.name} ({d.severity}) ---", "1", color))

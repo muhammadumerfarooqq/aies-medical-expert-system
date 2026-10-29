@@ -7,17 +7,14 @@ Termination: each cycle fires one rule, and a rule can fire again only when one
 of its premise CFs changed. kb_verify forbids cycles in the rule graph, so CFs
 settle after finitely many firings and the loop always reaches a fixed point.
 
-Run the demo / acceptance check with:  python -m expert_system.engine
+The tests live in run_tests.py (python run_tests.py).
 """
 
 from __future__ import annotations
 
-import sys
 from decimal import ROUND_HALF_UP, Decimal
 from dataclasses import asdict, dataclass, field
 from typing import Optional
-
-from expert_system.kb_verify import load_kb, verify_kb
 
 EPSILON = 1e-9  # tolerance for comparing floating-point CFs
 
@@ -67,6 +64,8 @@ class DiagnosisResult:
     disclaimer: str = ""
     trace: list[Firing] = field(default_factory=list)
     working_memory: dict[str, float] = field(default_factory=dict)
+    # Diseases with 0 < CF < display threshold: {"disease_id", "name", "cf"}, best first.
+    below_threshold: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         """Return the whole result as plain dicts/lists (for tests and the GUI)."""
@@ -242,7 +241,7 @@ def display_name(kb: dict, item_id: str) -> str:
         return kb["symptoms"][item_id]["label"]
     if item_id in kb["diseases"]:
         return kb["diseases"][item_id]["name"]
-    return item_id.replace("_", " ").capitalize()   # "dengue_signs" -> "Dengue signs"
+    return item_id.replace("_", " ").capitalize()   # "some_fact_id" -> "Some fact id"
 
 
 def explain_fact(kb: dict, fact: str, memory: dict, contributions: dict,
@@ -323,113 +322,15 @@ def diagnose(kb: dict, symptoms: dict) -> DiagnosisResult:
         if did in shown:
             continue
         if memory.get(did, 0.0) > 0:
+            result.below_threshold.append(
+                {"disease_id": did, "name": kb["diseases"][did]["name"], "cf": memory[did]})
             result.why_not[did] = [f"CF {fmt(memory[did], 3)} is below the display "
                                    f"threshold {conv['display_threshold']}"]
         else:
             result.why_not[did] = why_not_fact(kb, did, memory)
+    result.below_threshold.sort(key=lambda item: -item["cf"])
     return result
 
 
-# ------------------------------------------------------------------- demo (Checkpoint A)
-
-CASES = [
-    {"name": "A: severe + mild together",
-     "input": {"fever": "moderate", "rash": "yes", "pain_behind_eyes": "moderate",
-               "runny_nose": "moderate", "sneezing": "moderate", "sore_throat": "moderate"},
-     "shown": [("dengue", 0.5355), ("common_cold", 0.5712)], "percents": [48.4, 51.6],
-     "alerts": [], "unknown": []},
-    {"name": "B: close case (dengue vs malaria)",
-     "input": {"fever": "moderate", "headache": "moderate", "nausea_vomiting": "moderate",
-               "body_aches": "moderate"},
-     "shown": [("dengue", 0.378), ("malaria", 0.378)], "alerts": [], "unknown": [],
-     "extra": [("influenza not concluded", lambda r: "influenza" not in r.working_memory)]},
-    {"name": "C: pneumonia + red flag",
-     "input": {"fever": "moderate", "cough": "moderate", "shortness_of_breath": "moderate",
-               "chest_pain": "moderate"},
-     "shown": [("pneumonia", 0.595)], "alerts": ["RF2"], "unknown": [],
-     "extra": [("RF2 fired in cycle 1",
-                lambda r: r.trace[0].rule_id == "RF2" and r.trace[0].cycle == 1)]},
-    {"name": "D: B plus bleeding gums",
-     "input": {"fever": "moderate", "headache": "moderate", "nausea_vomiting": "moderate",
-               "body_aches": "moderate", "bleeding_gums": "yes"},
-     "shown": [("dengue", 0.630), ("malaria", 0.378)], "alerts": ["RF1"], "unknown": []},
-    {"name": "E: fever only",
-     "input": {"fever": "moderate"}, "shown": [], "alerts": [], "unknown": []},
-    {"name": "F: fever + unknown symptom",
-     "input": {"fever": "moderate", "itching": "moderate"},
-     "shown": [], "alerts": [], "unknown": ["itching"]},
-    {"name": "G: follow-up symptom without fever",
-     "input": {"fever_more_than_3_days": "yes"}, "shown": [], "alerts": [], "unknown": [],
-     "extra": [("warning reported", lambda r: len(r.warnings) == 1)]},
-]
-
-
-def check_case(case: dict, result: DiagnosisResult) -> list[str]:
-    """Compare a result with the expected values; return a list of failure messages."""
-    problems = []
-    got = [(d.disease_id, d.cf) for d in result.diseases]
-    if [g[0] for g in got] != [e[0] for e in case["shown"]]:
-        problems.append(f"shown diseases {[g[0] for g in got]} != {[e[0] for e in case['shown']]}")
-    else:
-        for (did, cf), (_, expected) in zip(got, case["shown"]):
-            if abs(cf - expected) > 0.001:
-                problems.append(f"{did} CF {fmt(cf, 4)} != {expected}")
-    for d, expected in zip(result.diseases, case.get("percents", [])):
-        if abs(d.percent - expected) > 0.05:
-            problems.append(f"{d.disease_id} percent {fmt(d.percent, 1)} != {expected}")
-    if [a["id"] for a in result.alerts] != case["alerts"]:
-        problems.append(f"alerts {[a['id'] for a in result.alerts]} != {case['alerts']}")
-    if result.unknown_symptoms != case["unknown"]:
-        problems.append(f"unknown {result.unknown_symptoms} != {case['unknown']}")
-    for label, test in case.get("extra", []):
-        if not test(result):
-            problems.append(f"check failed: {label}")
-    return problems
-
-
-def print_result(result: DiagnosisResult) -> None:
-    """Print shown diseases, alerts, unknown symptoms, warnings and the trace."""
-    for a in result.alerts:
-        print(f"  ALERT {a['id']}: {a['message']}")
-    if not result.diseases:
-        print("  No disease reached the display threshold.")
-    for i, d in enumerate(result.diseases, 1):
-        print(f"  {i}. {d.name}: CF {fmt(d.cf, 2)} ({fmt(d.cf, 4)}), {fmt(d.percent, 1)}%, {d.severity}")
-    if result.unknown_symptoms:
-        print(f"  Unknown symptoms: {', '.join(result.unknown_symptoms)}")
-    for w in result.warnings:
-        print(f"  Warning: {w}")
-    for f in result.trace:
-        conflict = ", ".join(f.conflict_set)
-        if f.kind == "red_flag":
-            action = f"{f.rule_id} -> ALERT"
-        else:
-            action = (f"{f.rule_id} -> {f.concluded_fact} "
-                      f"{fmt(f.cf_before, 3)} -> {fmt(f.cf_after, 3)}"
-                      + (" (re-fire)" if f.refire else ""))
-        print(f"    cycle {f.cycle}: [{conflict}] fired {action}")
-
-
-def main() -> int:
-    """Load + verify the KB, run the acceptance cases, print PASS/FAIL for each."""
-    kb = load_kb()
-    ok, errors, _ = verify_kb(kb)
-    if not ok:
-        for error in errors:
-            print(f"ERROR: {error}")
-        return 1
-    failures = 0
-    for case in CASES:
-        result = diagnose(kb, case["input"])
-        problems = check_case(case, result)
-        print(f"Case {case['name']}: {'PASS' if not problems else 'FAIL'}")
-        print_result(result)
-        for p in problems:
-            print(f"  !! {p}")
-        failures += bool(problems)
-    print(f"Checkpoint A: {len(CASES) - failures}/{len(CASES)} cases passed")
-    return 1 if failures else 0
-
-
 if __name__ == "__main__":
-    sys.exit(main())
+    print("Run: python run_tests.py")

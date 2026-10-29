@@ -1,0 +1,80 @@
+[
+  {
+    "id": "T01", "name": "Dengue",
+    "source": "WHO WPRO dengue: \"high fever ... with two of: headache, pain behind the eyes, ... muscle or joint pains, rash\"",
+    "input": {"fever": "severe", "pain_behind_eyes": "moderate", "headache": "moderate", "body_aches": "moderate", "rash": "yes"},
+    "expect": {"most_likely": "dengue", "alerts": []}
+  },
+  {
+    "id": "T02", "name": "Malaria, early symptoms",
+    "source": "WHO malaria fact sheet (Dec 2025): \"The most common early symptoms of malaria are fever, headache and chills.\"",
+    "input": {"fever": "moderate", "headache": "moderate", "chills": "moderate"},
+    "expect": {"most_likely": "malaria", "alerts": []}
+  },
+  {
+    "id": "T03", "name": "Typhoid",
+    "source": "WHO typhoid fact sheet: \"prolonged high fever, fatigue, headache, nausea, abdominal pain, and constipation or diarrhoea\"",
+    "input": {"fever": "severe", "fever_more_than_3_days": "yes", "fatigue": "moderate", "headache": "moderate", "nausea_vomiting": "moderate", "abdominal_pain": "moderate", "diarrhea_or_constipation": "moderate"},
+    "expect": {"most_likely": "typhoid", "alerts": []}
+  },
+  {
+    "id": "T04", "name": "Influenza",
+    "source": "WHO influenza fact sheet: \"sudden onset of fever, cough (usually dry), headache, muscle and joint pain, severe malaise, sore throat and a runny nose\"",
+    "input": {"fever": "severe", "cough": "moderate", "headache": "moderate", "body_aches": "moderate", "fatigue": "moderate", "sore_throat": "mild", "runny_nose": "mild"},
+    "expect": {"most_likely": "influenza", "shown_exclude": ["common_cold"], "alerts": []}
+  },
+  {
+    "id": "T05", "name": "Pneumonia",
+    "source": "WHO pneumonia: \"cough, shortness of breath, fever, sweating and shaking chills, fatigue, chest pain\"",
+    "input": {"fever": "moderate", "cough": "severe", "shortness_of_breath": "moderate", "chest_pain": "moderate", "chills": "moderate", "fatigue": "mild"},
+    "expect": {"most_likely": "pneumonia", "alerts": ["RF2"]}
+  },
+  {
+    "id": "T06", "name": "Common cold",
+    "source": "CDC common cold: \"sneezing, congestion, sore throat, cough ... most people with colds do not have a fever\"",
+    "input": {"sneezing": "moderate", "runny_nose": "moderate", "sore_throat": "mild", "cough": "mild"},
+    "expect": {"most_likely": "common_cold", "shown_exclude": ["influenza", "pneumonia"], "alerts": []}
+  },
+  {
+    "id": "T07", "name": "Mixed severe + mild (severe ranked first)",
+    "source": "CCP requirement: prioritize severe diseases over mild ones",
+    "input": {"fever": "moderate", "rash": "yes", "pain_behind_eyes": "moderate", "runny_nose": "moderate", "sneezing": "moderate", "sore_throat": "moderate"},
+    "expect": {"first": "dengue", "shown_include": ["dengue", "common_cold"], "alerts": []}
+  },
+  {
+    "id": "T08", "name": "Edge: fever only",
+    "source": "Edge case: a single non-specific symptom must not give a diagnosis",
+    "input": {"fever": "severe"},
+    "expect": {"none_shown": true}
+  },
+  {
+    "id": "T09", "name": "Edge: no symptoms",
+    "source": "Edge case: empty input",
+    "input": {},
+    "expect": {"none_shown": true}
+  },
+  {
+    "id": "T10", "name": "Edge: unknown symptom",
+    "source": "Edge case: symptom not in the knowledge base is reported, not used",
+    "input": {"fever": "moderate", "itching": "moderate"},
+    "expect": {"none_shown": true, "unknown": ["itching"]}
+  },
+  {
+    "id": "T11", "name": "Dengue warning sign",
+    "source": "CDC dengue: warning signs include \"bleeding from the nose or gums\"",
+    "input": {"fever": "severe", "pain_behind_eyes": "moderate", "body_aches": "moderate", "nausea_vomiting": "moderate", "bleeding_gums": "yes"},
+    "expect": {"most_likely": "dengue", "alerts": ["RF1"]}
+  },
+  {
+    "id": "T12", "name": "Severe malaria",
+    "source": "WHO malaria: severe symptoms include \"impaired consciousness\"",
+    "input": {"fever": "severe", "chills": "moderate", "sweating": "moderate", "confusion": "yes"},
+    "expect": {"most_likely": "malaria", "alerts": ["RF3"]}
+  },
+  {
+    "id": "T13", "name": "Edge: weak evidence near the threshold",
+    "source": "Edge case: evidence just below the display threshold is reported as such",
+    "input": {"fever": "severe", "chest_pain": "moderate"},
+    "expect": {"none_shown": true, "below_threshold_include": ["pneumonia"]}
+  }
+]

@@ -1,0 +1,41 @@
+[
+  {
+    "id": "A", "name": "Severe + mild together",
+    "input": {"fever": "moderate", "rash": "yes", "pain_behind_eyes": "moderate", "runny_nose": "moderate", "sneezing": "moderate", "sore_throat": "moderate"},
+    "shown": [{"id": "dengue", "cf": 0.5355}, {"id": "common_cold", "cf": 0.5712}],
+    "percents": [48.4, 51.6], "alerts": [], "unknown": []
+  },
+  {
+    "id": "B", "name": "Close case (dengue vs malaria)",
+    "input": {"fever": "moderate", "headache": "moderate", "nausea_vomiting": "moderate", "body_aches": "moderate"},
+    "shown": [{"id": "dengue", "cf": 0.378}, {"id": "malaria", "cf": 0.378}],
+    "alerts": [], "unknown": [], "not_concluded": ["influenza"]
+  },
+  {
+    "id": "C", "name": "Pneumonia + red flag fired in cycle 1",
+    "input": {"fever": "moderate", "cough": "moderate", "shortness_of_breath": "moderate", "chest_pain": "moderate"},
+    "shown": [{"id": "pneumonia", "cf": 0.595}],
+    "alerts": ["RF2"], "unknown": [], "first_fired": "RF2"
+  },
+  {
+    "id": "D", "name": "B plus bleeding gums",
+    "input": {"fever": "moderate", "headache": "moderate", "nausea_vomiting": "moderate", "body_aches": "moderate", "bleeding_gums": "yes"},
+    "shown": [{"id": "dengue", "cf": 0.630}, {"id": "malaria", "cf": 0.378}],
+    "alerts": ["RF1"], "unknown": []
+  },
+  {
+    "id": "E", "name": "Fever only",
+    "input": {"fever": "moderate"},
+    "shown": [], "alerts": [], "unknown": []
+  },
+  {
+    "id": "F", "name": "Fever + unknown symptom",
+    "input": {"fever": "moderate", "itching": "moderate"},
+    "shown": [], "alerts": [], "unknown": ["itching"]
+  },
+  {
+    "id": "G", "name": "Follow-up symptom without its parent",
+    "input": {"fever_more_than_3_days": "yes"},
+    "shown": [], "alerts": [], "unknown": [], "warnings_count": 1
+  }
+]

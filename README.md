@@ -14,11 +14,14 @@ AIES-CCP/
 ├── expert_system/
 │   ├── __init__.py          # Package marker for the engine code
 │   ├── kb_verify.py         # Loads the KB and checks its consistency (8 checks)
-│   ├── engine.py            # Generic forward-chaining inference engine + Checkpoint A demo
+│   ├── engine.py            # Generic forward-chaining inference engine (no medical names)
 │   └── cli.py               # Command-line interface (interactive and --symptoms modes)
 ├── data/
 │   └── knowledge_base.json  # The knowledge base: symptoms, diseases, rules, red flags
-├── tests/.gitkeep           # Test cases go here (Phase 4)
+├── run_tests.py             # Test runner: python run_tests.py [--verbose]
+├── tests/
+│   ├── cases.json           # 13 clinical test cases written from WHO/CDC descriptions
+│   └── regression.json      # 7 regression cases with exact expected CFs
 ├── docs/
 │   ├── kb_design.md         # Design document: source of truth for the KB
 │   ├── diagrams/.gitkeep    # Architecture and flow diagrams for the report
@@ -86,11 +89,7 @@ This runs the 8 consistency checks (unknown symptoms, bad THEN targets, unused f
 
 **Explanations:** every shown disease carries a justification (the rules supporting it, expanded down to root symptoms, with the CF arithmetic) plus severity, treatment, prevention and sources. Every disease that is not shown carries a "why not": either its CF is below the threshold, or which symptoms each possible rule still needs (present or missing). The result also holds the red-flag alerts, the disclaimer, the full firing trace and the final working memory.
 
-**Run the demo / Checkpoint A** (seven acceptance cases, PASS/FAIL each):
-
-```
-python -m expert_system.engine
-```
+The result also lists `below_threshold`: diseases with some evidence (0 < CF < 0.30) that were not shown. The engine has no built-in demo; run the tests with `python run_tests.py` (see Testing).
 
 ## Using the CLI
 
@@ -125,13 +124,32 @@ Symptoms can be separated by commas, "and", "aur", "&" or "+" (for example `bukh
 
 **Result format** (same in both modes): red-flag alerts first (framed with `!` lines and an `EMERGENCY:` prefix), the recognised symptoms, a ranked table (rank, disease, severity, confidence %, CF), then for each disease its description, the reasoning ("Why this was suggested"), treatment, prevention and sources. Unknown symptoms and warnings follow. If no disease reaches the confidence threshold (30%, from the KB) the CLI says there is not enough evidence. The disclaimer is always last.
 
+## Testing
+
+```
+python run_tests.py            # add --verbose to print the full diagnosis of failing cases
+```
+
+The runner prints six sections as tables, a summary, and `TOTAL: x/y passed`. The exit code is 1 if anything fails.
+
+| Section | What it proves |
+|---|---|
+| [1] KB verification | the knowledge base passes all 8 consistency checks |
+| [2] Clinical cases | 13 cases in `tests/cases.json`, written from WHO/CDC symptom descriptions (the source quote is stored with each case), not from our own rules. They check the most likely disease, ranking, red-flag alerts, unknown symptoms and edge cases |
+| [3] Regression | 7 cases in `tests/regression.json` with exact expected CFs (tolerance 0.001), so any accidental change to a rule or CF is noticed |
+| [4] CLI input parsing | separators ("and", "aur", "&"), Roman Urdu synonyms, no splitting on "or", and "did you mean" suggestions |
+| [5] Verifier self-tests | deliberately broken copies of the KB (kept in memory only) are caught by `kb_verify` |
+| [6] Order independence | shuffling the order of rules and red flags (50 fixed seeds) never changes any CF |
+
+A failing clinical case is a finding about the knowledge base, not a reason to edit the test.
+
 ## Progress
 
 - [x] Phase 0: Setup
 - [x] Phase 1: Knowledge Base
 - [x] Phase 2: Inference Engine
 - [x] Phase 3: CLI
-- [ ] Phase 4: Tests
+- [x] Phase 4: Tests
 - [ ] Phase 5: Hybrid Backward Chaining
 - [ ] Phase 6: Streamlit GUI
 - [ ] Phase 7: Screenshots
