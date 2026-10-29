@@ -1,12 +1,13 @@
 """Test runner: python run_tests.py [--verbose]
 
-Six sections, each printed as an ASCII table:
+Seven sections, each printed as an ASCII table:
   [1] KB verification            - the knowledge base passes all 8 consistency checks
   [2] Clinical cases             - cases written from WHO/CDC descriptions (tests/cases.json)
   [3] Regression                 - exact CFs from the design check (tests/regression.json)
   [4] CLI input parsing          - separators, synonyms and "did you mean"
   [5] Verifier self-tests        - the verifier catches deliberately broken KBs (in memory only)
   [6] Order independence         - shuffling rule order never changes the result
+  [7] Hybrid backward chaining   - questions are generated from rules and settle close calls
 
 A failing test is a finding about the knowledge base, not something to hide.
 Exit code is 1 if anything fails.
@@ -21,6 +22,7 @@ import random
 import sys
 from pathlib import Path
 
+from expert_system.backward import close_call, find_questions, run_session
 from expert_system.cli import print_result, print_table, print_trace, resolve_symptom, split_entries
 from expert_system.engine import DiagnosisResult, diagnose, fmt
 from expert_system.kb_verify import load_kb, verify_kb
@@ -255,6 +257,122 @@ def section_order(kb: dict):
     return rows, passed, len(SEEDS), []
 
 
+# ------------------------------------------------------- [7] hybrid backward chaining
+
+# Base close case: two diseases tie. Ids appear here because these are tests.
+BASE_CLOSE = {"fever": "moderate", "headache": "moderate",
+              "nausea_vomiting": "moderate", "body_aches": "moderate"}
+
+
+def scripted(answers: dict):
+    """Build an answer function that looks answers up by symptom id (None = stop)."""
+    return lambda question: answers.get(question.symptom_id)
+
+
+def case_input(case_id: str) -> dict:
+    """Input of one clinical case from tests/cases.json."""
+    return next(c["input"] for c in load_json("cases.json") if c["id"] == case_id)
+
+
+def source_mentions_kb_names(kb: dict) -> list[str]:
+    """KB disease/symptom ids, names and labels that appear in backward.py (should be none)."""
+    text = (ROOT / "expert_system" / "backward.py").read_text(encoding="utf-8").lower()
+    names = list(kb["diseases"]) + [d["name"] for d in kb["diseases"].values()]
+    names += list(kb["symptoms"]) + [s["label"] for s in kb["symptoms"].values()]
+    return sorted({n for n in names if n.lower() in text})
+
+
+def section_hybrid(kb: dict):
+    """Test close-call detection, generated questions and the question session."""
+    rows, passed = [], 0
+
+    def add(case_id: str, name: str, expected: str, actual: str, problems: list[str]) -> None:
+        """Record one row and count it if it passed."""
+        nonlocal passed
+        rows.append([case_id, name, expected, actual, pass_fail(problems)])
+        passed += not problems
+
+    # H1: the base case is a close call; questions come from the rules.
+    base = diagnose(kb, BASE_CLOSE)
+    call = close_call(base)
+    questions = find_questions(kb, base, BASE_CLOSE, set())
+    ids = [q.symptom_id for q in questions[:3]]
+    problems = []
+    if call is None or {call.first.disease_id, call.second.disease_id} != {"dengue", "malaria"}:
+        problems.append("expected a close call between dengue and malaria")
+    elif call.gap > 0.05:
+        problems.append(f"gap {fmt(call.gap, 1)}, expected 0.0")
+    if ids != ["bleeding_gums", "chills", "sweating"]:
+        problems.append(f"questions {ids}")
+    elif not all(r in " ".join(questions[0].path) for r in ("R7", "R6")):
+        problems.append(f"first path {questions[0].path}")
+    add("H1", "Close call + generated questions", "dengue~malaria gap 0.0; bleeding_gums,chills,sweating",
+        f"gap {fmt(call.gap, 1) if call else '-'}; {','.join(ids)}", problems)
+
+    # H2-H4: scripted sessions.
+    sessions = [
+        ("H2", "Answer decides: bleeding gums yes", {"bleeding_gums": "yes"}, 1, "separated"),
+        ("H3", "Answer decides: no bleeding, chills", {"bleeding_gums": "no", "chills": "moderate"}, 2, "separated"),
+        ("H4", "All denied: question limit", {"bleeding_gums": "no", "chills": "no", "sweating": "no"}, 3, "max_questions"),
+    ]
+    hybrids = {}
+    for case_id, name, answers, asked, outcome in sessions:
+        hybrid = run_session(kb, BASE_CLOSE, scripted(answers))
+        hybrids[case_id] = hybrid
+        final = {d.disease_id: d.cf for d in hybrid.final_result.diseases}
+        problems = []
+        if len(hybrid.steps) != asked or hybrid.outcome != outcome:
+            problems.append(f"asked {len(hybrid.steps)}, outcome {hybrid.outcome}")
+        if case_id == "H2":
+            if abs(final.get("dengue", 0) - 0.630) > CF_TOLERANCE or abs(final.get("malaria", 0) - 0.378) > CF_TOLERANCE:
+                problems.append(f"final CFs {final}")
+            if [a["id"] for a in hybrid.final_result.alerts] != ["RF1"]:
+                problems.append("alert RF1 expected")
+        if case_id == "H3":
+            order = [d.disease_id for d in hybrid.final_result.diseases]
+            if order != ["malaria", "dengue"] or abs(final.get("malaria", 0) - 0.597) > CF_TOLERANCE:
+                problems.append(f"final {order} {final}")
+        add(case_id, name, f"{asked} asked, {outcome}",
+            f"{len(hybrid.steps)} asked, {hybrid.outcome}; " + actual_text(hybrid.final_result), problems)
+
+    # H5: a clear case needs no questions.
+    hybrid = run_session(kb, case_input("T01"), scripted({}))
+    problems = [] if (hybrid.outcome == "not_close" and not hybrid.steps) else [f"{hybrid.outcome}"]
+    add("H5", "Clear case: no questions", "not_close, 0 asked", f"{hybrid.outcome}, {len(hybrid.steps)} asked", problems)
+
+    # H6: another close pair gets its own generated questions.
+    typhoid_input = case_input("T03")
+    result = diagnose(kb, typhoid_input)
+    call = close_call(result)
+    ids = [q.symptom_id for q in find_questions(kb, result, typhoid_input, set())]
+    pair = {call.first.disease_id, call.second.disease_id} if call else set()
+    problems = []
+    if pair != {"typhoid", "malaria"}:
+        problems.append(f"pair {sorted(pair)}")
+    if ids != ["chills", "sweating"]:
+        problems.append(f"questions {ids}")
+    add("H6", "Other close pair", "typhoid~malaria; chills,sweating", f"{sorted(pair)}; {','.join(ids)}", problems)
+
+    # H7: never ask a reported or denied symptom, never ask twice.
+    problems = []
+    for case_id, hybrid in hybrids.items():
+        asked = [s.question.symptom_id for s in hybrid.steps]
+        if len(asked) != len(set(asked)):
+            problems.append(f"{case_id}: symptom asked twice")
+        if set(asked) & set(BASE_CLOSE):
+            problems.append(f"{case_id}: asked an already reported symptom")
+    initial = [q.symptom_id for q in questions]
+    if len(initial) != len(set(initial)) or set(initial) & set(BASE_CLOSE):
+        problems.append("H1 question list has duplicates or reported symptoms")
+    add("H7", "No repeated/reported questions", "none asked twice or already known", "checked H1-H4", problems)
+
+    # H8: backward.py is generic - it names no disease or symptom.
+    found = source_mentions_kb_names(kb)
+    add("H8", "backward.py has no KB names", "no disease/symptom names", ",".join(found) or "none found",
+        [f"found {found}"] if found else [])
+    return rows, passed, 8, []
+
+
 # ------------------------------------------------------------------------- main
 
 def print_section(title: str, headers: list[str], rows: list[list[str]], failures: list,
@@ -272,7 +390,7 @@ def print_section(title: str, headers: list[str], rows: list[list[str]], failure
 
 
 def main() -> int:
-    """Run all six sections and print the summary; return the exit code."""
+    """Run all seven sections and print the summary; return the exit code."""
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description="Run the expert system tests")
     parser.add_argument("--verbose", action="store_true", help="print full diagnosis of failing cases")
@@ -298,6 +416,7 @@ def main() -> int:
         ("[4] CLI input parsing", ["Typed", "Expected", "Actual", "Result"], section_parsing),
         ("[5] Verifier self-tests", ["Test", "Expected", "Actual", "Result"], section_verifier),
         ("[6] Order independence", ["Shuffles", "Cases", "Outcome", "Result"], section_order),
+        ("[7] Hybrid backward chaining", ["ID", "Case", "Expected", "Actual", "Result"], section_hybrid),
     ]
     for title, headers, function in sections:
         rows, passed, total, failures = function(kb)

@@ -15,6 +15,7 @@ AIES-CCP/
 │   ├── __init__.py          # Package marker for the engine code
 │   ├── kb_verify.py         # Loads the KB and checks its consistency (8 checks)
 │   ├── engine.py            # Generic forward-chaining inference engine (no medical names)
+│   ├── backward.py          # Backward chaining: generates questions when two diseases are close
 │   └── cli.py               # Command-line interface (interactive and --symptoms modes)
 ├── data/
 │   └── knowledge_base.json  # The knowledge base: symptoms, diseases, rules, red flags
@@ -130,7 +131,7 @@ Symptoms can be separated by commas, "and", "aur", "&" or "+" (for example `bukh
 python run_tests.py            # add --verbose to print the full diagnosis of failing cases
 ```
 
-The runner prints six sections as tables, a summary, and `TOTAL: x/y passed`. The exit code is 1 if anything fails.
+The runner prints seven sections as tables, a summary, and `TOTAL: x/y passed`. The exit code is 1 if anything fails.
 
 | Section | What it proves |
 |---|---|
@@ -140,10 +141,51 @@ The runner prints six sections as tables, a summary, and `TOTAL: x/y passed`. Th
 | [4] CLI input parsing | separators ("and", "aur", "&"), Roman Urdu synonyms, no splitting on "or", and "did you mean" suggestions |
 | [5] Verifier self-tests | deliberately broken copies of the KB (kept in memory only) are caught by `kb_verify` |
 | [6] Order independence | shuffling the order of rules and red flags (50 fixed seeds) never changes any CF |
+| [7] Hybrid backward chaining | close calls are detected, questions are generated from the rules in the right order, scripted answers separate the diseases, no symptom is asked twice, and `backward.py` contains no disease or symptom names |
 
 A failing clinical case is a finding about the knowledge base, not a reason to edit the test.
 
 **Example of the iterative development cycle:** test T02 (WHO: "the most common early symptoms of malaria are fever, headache and chills") originally failed because no rule accepted that combination. The cause was found (the old R8 needed chills AND sweating), the rule was split (R8 now needs only chills; new R20 covers sweating), and all 78 tests passed again. The change and the rejected alternative (a rule that would double-count evidence and be refused by `kb_verify`) are recorded in section 13 of `docs/kb_design.md`.
+
+## Hybrid reasoning (forward + backward chaining)
+
+`expert_system/backward.py` adds backward chaining on top of the forward-chaining engine. It contains no disease or symptom names: every question is generated from the rules.
+
+**When it triggers:** after forward chaining, if at least two diseases are shown and the top two (by CF) are close, meaning `gap = (cf_a - cf_b) / (cf_a + cf_b) * 100 <= 15`. At most 3 questions are asked.
+
+**The 5 backward-chaining steps** (labelled in the code):
+
+1. Start with a goal: each of the two close diseases.
+2. Search for rules whose THEN part is the goal.
+3. Check each IF condition: a symptom already reported (CF at or above the firing threshold) is true.
+4. Not known: an intermediate fact becomes a sub-goal (steps 2 to 4 again); an unreported symptom becomes a question.
+5. Repeat until every sub-goal has been explored.
+
+**Why proven sub-goals are still explored:** the aim is not to prove one hypothesis but to find additional evidence that separates two hypotheses. A sub-goal that is already proven may still have other rules that a new answer would strengthen.
+
+Symptoms already reported or denied, symptoms whose `ask_only_if` parent was not reported, and symptoms that appear under both goals (they do not discriminate) are never asked. Questions are ordered by: completes a rule first, then higher rule CF, then the higher-CF disease, then KB rule order. After every answer, forward chaining runs again.
+
+**Example (interactive):**
+
+```
+HYBRID REASONING: Backward chaining
+Dengue 50.0% vs Malaria 50.0% are too close (gap 0.0 <= 15). Asking up to 3 questions to tell them apart.
+
+Why I'm asking: Dengue <- R7 needs Dengue signs <- R6 needs Bleeding gums or nose
+Bleeding gums or nose? (y/n) y
+  Updated ranking: Dengue 62.5% (CF 0.63), Malaria 37.5% (CF 0.38)
+
+Outcome: The diseases are now clearly separated.
+```
+
+The full final result is then printed, so new red-flag alerts (here the bleeding warning) appear. Menu option `[5]` shows the backward-chaining steps again.
+
+**Non-interactive:** without `--answers`, the CLI lists the questions that would be asked, with their rule paths. With `--answers` the session runs using your answers (same parsing and synonyms as `--symptoms`); a question not covered by `--answers` stops the session.
+
+```
+python main.py --symptoms "fever, headache, ulti, badan dard"
+python main.py --symptoms "fever, headache, ulti, badan dard" --answers "bleeding gums:yes"
+```
 
 ## Progress
 
@@ -152,7 +194,7 @@ A failing clinical case is a finding about the knowledge base, not a reason to e
 - [x] Phase 2: Inference Engine
 - [x] Phase 3: CLI
 - [x] Phase 4: Tests
-- [ ] Phase 5: Hybrid Backward Chaining
+- [x] Phase 5: Hybrid Backward Chaining
 - [ ] Phase 6: Streamlit GUI
 - [ ] Phase 7: Screenshots
 - [ ] Phase 8: Report & Title Page

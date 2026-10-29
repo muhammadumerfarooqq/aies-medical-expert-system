@@ -18,6 +18,8 @@ import sys
 import textwrap
 from typing import Optional
 
+from expert_system.backward import (CLOSE_MARGIN, MAX_QUESTIONS, HybridResult, Question, Step,
+                                     close_call, find_questions, run_session)
 from expert_system.engine import DiagnosisResult, diagnose, display_name, fmt
 
 CLOSE_MATCH_CUTOFF = 0.75   # difflib similarity needed for a "did you mean" hint
@@ -216,6 +218,92 @@ def print_why_not(kb: dict, result: DiagnosisResult) -> None:
         print("\n".join("    " + line for line in lines))
 
 
+# ------------------------------------------------------------ hybrid (backward chaining)
+
+OUTCOME_TEXT = {
+    "separated": "The diseases are now clearly separated.",
+    "no_more_questions": "No more questions can tell the diseases apart.",
+    "max_questions": "Question limit reached; the diseases are still close. Please see a doctor.",
+    "stopped": "Questions stopped before the diseases were separated.",
+    "not_close": "The top diseases were not close, so no questions were needed.",
+}
+
+
+def ranking_line(result: DiagnosisResult) -> str:
+    """One line with every shown disease, its relative % and CF."""
+    parts = [f"{d.name} {fmt(d.percent, 1)}% (CF {fmt(d.cf, 2)})" for d in result.diseases]
+    return ", ".join(parts) or "no disease shown"
+
+
+def print_hybrid_header(result: DiagnosisResult, color: bool) -> None:
+    """Announce backward chaining and say why it was triggered."""
+    call = close_call(result)
+    print(paint("\nHYBRID REASONING: Backward chaining", "1;36", color))
+    print(textwrap.fill(
+        f"{call.first.name} {fmt(call.first.percent, 1)}% vs {call.second.name} "
+        f"{fmt(call.second.percent, 1)}% are too close (gap {fmt(call.gap, 1)} <= "
+        f"{CLOSE_MARGIN:g}). Asking up to {MAX_QUESTIONS} questions to tell them apart.",
+        width=LINE_WIDTH))
+
+
+def why_asking(question: Question) -> str:
+    """The rule path that explains a question."""
+    return "Why I'm asking: " + " <- ".join(question.path)
+
+
+def print_updated_ranking(step: Step) -> None:
+    """Print the ranking after one answered question."""
+    print("  Updated ranking: " + ranking_line(step.result_after))
+
+
+def print_hybrid_steps(hybrid: Optional[HybridResult]) -> None:
+    """Print every question asked, the answer, and the ranking afterwards."""
+    print("\nBackward-chaining steps:")
+    if hybrid is None or not hybrid.steps:
+        print("  (no backward chaining took place)")
+        return
+    for i, step in enumerate(hybrid.steps, 1):
+        print(f"  Q{i}: {step.question.label} -> {step.answer}")
+        print("      " + why_asking(step.question))
+        print("      ranking after: " + ranking_line(step.result_after))
+    print("  Outcome: " + OUTCOME_TEXT[hybrid.outcome])
+
+
+def print_would_ask(kb: dict, result: DiagnosisResult, accepted: dict[str, str],
+                    color: bool) -> None:
+    """Non-interactive, no --answers: list the questions that WOULD be asked."""
+    print_hybrid_header(result, color)
+    questions = find_questions(kb, result, accepted, set())[:MAX_QUESTIONS]
+    if not questions:
+        print("No question could separate them.")
+        return
+    print("Questions that would be asked:")
+    for i, q in enumerate(questions, 1):
+        print(f"  {i}. {q.label}?")
+        print("     " + why_asking(q))
+    hint = ", ".join(f"{q.label.lower()}:yes" for q in questions[:2])
+    print(f'Hint: re-run with --answers "{hint}" (use :no for a symptom you do not have).')
+
+
+def interactive_hybrid(kb: dict, accepted: dict[str, str], result: DiagnosisResult,
+                       color: bool) -> HybridResult:
+    """Ask the generated questions one by one and show how the ranking changes."""
+    print_hybrid_header(result, color)
+
+    def answer_fn(question: Question) -> str:
+        """Ask one question; return 'no', an intensity label, or 'yes'."""
+        print("\n" + why_asking(question))
+        if not ask_yes_no(f"{question.label}? (y/n) "):
+            return "no"
+        if question.input_type == "intensity":
+            return ask_intensity(kb, question.label)
+        return "yes"
+
+    hybrid = run_session(kb, accepted, answer_fn, on_step=print_updated_ranking)
+    print("\nOutcome: " + OUTCOME_TEXT[hybrid.outcome])
+    return hybrid
+
+
 # ------------------------------------------------------------- non-interactive mode
 
 def parse_symptom_arg(kb: dict, text: str) -> tuple[dict[str, str], list[str]]:
@@ -248,10 +336,31 @@ def parse_symptom_arg(kb: dict, text: str) -> tuple[dict[str, str], list[str]]:
 
 
 def run_once(kb: dict, args: argparse.Namespace, color: bool) -> int:
-    """Non-interactive consultation from --symptoms."""
+    """Non-interactive consultation from --symptoms (and optional --answers)."""
     accepted, problems = parse_symptom_arg(kb, args.symptoms)
     result = diagnose(kb, accepted)
     print_result(kb, result, accepted, problems, color)
+    if close_call(result) is not None:
+        if args.answers is None:
+            print_would_ask(kb, result, accepted, color)
+        else:
+            answers, answer_problems = parse_symptom_arg(kb, args.answers)
+            print_hybrid_header(result, color)
+
+            def answer_fn(question: Question) -> Optional[str]:
+                """Look the answer up in --answers; None stops the session."""
+                value = answers.get(question.symptom_id)
+                print(f"\n{why_asking(question)}\n  {question.label}? -> "
+                      f"{value or 'not in --answers (stopping)'}")
+                return value
+
+            hybrid = run_session(kb, accepted, answer_fn, on_step=print_updated_ranking)
+            print("\nOutcome: " + OUTCOME_TEXT[hybrid.outcome])
+            if hybrid.steps:
+                result = hybrid.final_result
+                print_result(kb, result, hybrid.final_symptoms, problems + answer_problems, color)
+    elif args.answers is not None:
+        print("\nNote: --answers ignored because no close call needed backward chaining.")
     if args.trace:
         print_trace(kb, result)
     if args.why_not:
@@ -353,12 +462,13 @@ def collect_symptoms(kb: dict) -> tuple[dict[str, str], list[str]]:
     return accepted, notes
 
 
-def consultation_menu(kb: dict, result: DiagnosisResult) -> bool:
+def consultation_menu(kb: dict, result: DiagnosisResult,
+                      hybrid: Optional[HybridResult] = None) -> bool:
     """Show the after-result menu; return True for a new consultation, False to quit."""
     while True:
         print("\n[1] Show reasoning trace  [2] Why other diseases were ruled out  "
-              "[3] New consultation  [4] Quit")
-        choice = ask("Choose 1-4: ")
+              "[3] New consultation  [4] Quit  [5] Show backward-chaining steps")
+        choice = ask("Choose 1-5: ")
         if choice == "1":
             print_trace(kb, result)
         elif choice == "2":
@@ -367,8 +477,10 @@ def consultation_menu(kb: dict, result: DiagnosisResult) -> bool:
             return True
         elif choice == "4":
             return False
+        elif choice == "5":
+            print_hybrid_steps(hybrid)
         else:
-            print("Please enter a number from 1 to 4.")
+            print("Please enter a number from 1 to 5.")
 
 
 def run_interactive(kb: dict, color: bool) -> int:
@@ -384,7 +496,13 @@ def run_interactive(kb: dict, color: bool) -> int:
             break
         result = diagnose(kb, accepted)
         print_result(kb, result, accepted, notes, color)
-        if not consultation_menu(kb, result):
+        hybrid = None
+        if close_call(result) is not None:
+            hybrid = interactive_hybrid(kb, accepted, result, color)
+            if hybrid.steps:
+                result = hybrid.final_result
+                print_result(kb, result, hybrid.final_symptoms, notes, color)
+        if not consultation_menu(kb, result, hybrid):
             break
     print("Goodbye.")
     return 0
@@ -396,6 +514,8 @@ def parse_args(argv: Optional[list[str]] = None) -> argparse.Namespace:
     """Define and parse the command-line options."""
     parser = argparse.ArgumentParser(description="Intelligent Medical Diagnosis Expert System")
     parser.add_argument("--symptoms", help='non-interactive, e.g. "bukhar:moderate, rash:yes"')
+    parser.add_argument("--answers",
+                        help='answers to backward-chaining questions, e.g. "bleeding gums:yes, chills:no"')
     parser.add_argument("--trace", action="store_true", help="also print the reasoning trace")
     parser.add_argument("--why-not", action="store_true", dest="why_not",
                         help="also explain why other diseases were ruled out")
