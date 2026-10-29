@@ -100,7 +100,7 @@ Layer 1: symptoms → `<disease>_signs` → Layer 2: `fever` ∧ `<disease>_sign
 
 ---
 
-## 6. Diagnostic rules (19) — heuristic
+## 6. Diagnostic rules (20) — heuristic
 
 Priority (conflict resolution / salience): red flags **100**, severe-disease chain **30**, moderate **20**, mild **10**. Intermediate rules inherit the priority of the disease they feed.
 
@@ -113,7 +113,8 @@ Priority (conflict resolution / salience): red flags **100**, severe-disease cha
 | R5 | `body_aches` ∧ `nausea_vomiting` | `dengue_signs` | 0.60 | 30 | Dengue: aches + nausea/vomiting (WHO, CDC) |
 | R6 | `bleeding_gums` | `dengue_signs` | 0.70 | 30 | Dengue warning sign (WHO, CDC) |
 | R7 | `fever` ∧ `dengue_signs` | **Dengue** | 0.90 | 30 | WHO: high fever + ≥2 dengue symptoms |
-| R8 | `chills` ∧ `sweating` | `malaria_signs` | 0.85 | 30 | Classic malaria paroxysm (WHO) |
+| R8 | `chills` | `malaria_signs` | 0.60 | 30 | Chills is one of the three most common early malaria symptoms (WHO) |
+| R20 | `sweating` | `malaria_signs` | 0.40 | 30 | Sweating stage of the malaria paroxysm; weak evidence on its own (WHO) |
 | R9 | `headache` ∧ `nausea_vomiting` | `malaria_signs` | 0.60 | 30 | Early malaria symptoms (WHO) |
 | R10 | `fever` ∧ `malaria_signs` | **Malaria** | 0.90 | 30 | Fever + malaria signs (WHO) |
 | R11 | `fever` ∧ `fever_more_than_3_days` | `prolonged_fever` | 0.90 | 20 | Lecture heuristic: fever 3+ days → test for infection |
@@ -138,7 +139,7 @@ Fired with priority 100, before any diagnosis. Output an alert; they do not add 
 | RF2 | `chest_pain` ∧ `shortness_of_breath` | "Chest pain with shortness of breath needs urgent assessment. Seek emergency medical care now." | WHO (pneumonia) |
 | RF3 | `confusion` | "Confusion or reduced consciousness can signal a severe infection such as severe malaria. Seek emergency medical care now." | WHO (malaria, pneumonia) |
 
-**Totals:** 6 diseases · 20 symptoms · 7 intermediate facts · 22 rules (19 diagnostic + 3 red-flag)
+**Totals:** 6 diseases · 20 symptoms · 7 intermediate facts · 23 rules (20 diagnostic + 3 red-flag)
 
 ---
 
@@ -168,7 +169,7 @@ Fired with priority 100, before any diagnosis. Output an alert; they do not add 
 7. Every disease is reachable by at least one rule.
 8. No rule chain forms a cycle.
 
-On success print: `KB verified: 6 diseases, 20 symptoms, 7 intermediate facts, 22 rules`
+On success print: `KB verified: 6 diseases, 20 symptoms, 7 intermediate facts, 23 rules`
 
 ---
 
@@ -191,7 +192,7 @@ These were computed with a scratch prototype of the engine to confirm the CF val
 | Common Cold | runny nose, sneezing, sore throat | Common Cold 0.571 | Afebrile disease |
 | All severe | fever, cough, body aches, shortness of breath | Pneumonia 0.68 first, Influenza 0.595 | Overlap ranked by severity |
 
-Overcounting check (constraint 6): **PASS** for all 22 rules.
+Overcounting check (constraint 6): **PASS** for all 23 rules.
 
 ---
 
@@ -219,3 +220,13 @@ Overcounting check (constraint 6): **PASS** for all 22 rules.
 - CDC — FluView quick reference (ILI definition): https://gis.cdc.gov/grasp/fluview/FluViewPhase1QuickReferenceGuide.pdf
 - Russell, S. & Norvig, P., *Artificial Intelligence: A Modern Approach*, 2nd ed. — §7.5 (forward chaining), §14.7 (certainty factors, MYCIN)
 - Shortliffe, E. H. & Buchanan, B. G. (1975). A model of inexact reasoning in medicine. *Mathematical Biosciences*, 23, 351–379.
+
+---
+
+## 13. Knowledge refinement log
+
+The development cycle is iterative: testing can send us back to formalization. Changes made after testing are recorded here. Rule R20 sits beside R8 in the JSON but is numbered last so existing rule IDs did not change.
+
+| Date | Test | Finding | Cause | Change | Rejected alternative | Result after |
+|---|---|---|---|---|---|---|
+| 29 Oct 2026 | T02 (WHO: "The most common early symptoms of malaria are fever, headache and chills") | No disease was concluded for fever + headache + chills | `malaria_signs` could only come from R8 (`chills` AND `sweating`) or R9 (`headache` AND `nausea_vomiting`); the WHO triad completes neither | R8 IF changed to `chills` only, CF 0.60. New R20: `sweating` -> `malaria_signs`, CF 0.40. KB version 1.1 | `headache` AND `chills` -> `malaria_signs`: it shares `headache` with R9 and `chills` with R8, which would double-count evidence (CF overcounting, AIMA 14.7); check 6 of `kb_verify` would reject it | T02 passes (Malaria CF 0.38). `kb_verify`: 23 rules. `run_tests.py`: 78/78 passed. Side effect: any case with fever + chills now also shows Malaria at 0.38 (e.g. the pneumonia case T05), because chills alone is now enough evidence for `malaria_signs` |

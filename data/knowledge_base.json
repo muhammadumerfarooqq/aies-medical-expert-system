@@ -1,7 +1,7 @@
 {
   "meta": {
     "title": "Intelligent Medical Diagnosis Expert System - Knowledge Base",
-    "version": "1.0",
+    "version": "1.1",
     "cf_conventions": {
       "intensity_cf": {"mild": 0.4, "moderate": 0.7, "severe": 1.0, "yes": 1.0},
       "rule_fire_threshold": 0.2,
@@ -286,7 +286,8 @@
     {"id": "R5", "if": ["body_aches", "nausea_vomiting"], "then": "dengue_signs", "cf": 0.60, "priority": 30, "knowledge_type": "heuristic", "rationale": "Dengue: aches + nausea/vomiting", "source": "WHO, CDC"},
     {"id": "R6", "if": ["bleeding_gums"], "then": "dengue_signs", "cf": 0.70, "priority": 30, "knowledge_type": "heuristic", "rationale": "Dengue warning sign", "source": "WHO, CDC"},
     {"id": "R7", "if": ["fever", "dengue_signs"], "then": "dengue", "cf": 0.90, "priority": 30, "knowledge_type": "heuristic", "rationale": "High fever + ≥2 dengue symptoms", "source": "WHO"},
-    {"id": "R8", "if": ["chills", "sweating"], "then": "malaria_signs", "cf": 0.85, "priority": 30, "knowledge_type": "heuristic", "rationale": "Classic malaria paroxysm", "source": "WHO"},
+    {"id": "R8", "if": ["chills"], "then": "malaria_signs", "cf": 0.60, "priority": 30, "knowledge_type": "heuristic", "rationale": "Chills is one of the three most common early malaria symptoms (WHO)", "source": "WHO"},
+    {"id": "R20", "if": ["sweating"], "then": "malaria_signs", "cf": 0.40, "priority": 30, "knowledge_type": "heuristic", "rationale": "Sweating stage of the malaria paroxysm; weak evidence on its own", "source": "WHO"},
     {"id": "R9", "if": ["headache", "nausea_vomiting"], "then": "malaria_signs", "cf": 0.60, "priority": 30, "knowledge_type": "heuristic", "rationale": "Early malaria symptoms", "source": "WHO"},
     {"id": "R10", "if": ["fever", "malaria_signs"], "then": "malaria", "cf": 0.90, "priority": 30, "knowledge_type": "heuristic", "rationale": "Fever + malaria signs", "source": "WHO"},
     {"id": "R11", "if": ["fever", "fever_more_than_3_days"], "then": "prolonged_fever", "cf": 0.90, "priority": 20, "knowledge_type": "heuristic", "rationale": "Lecture heuristic: fever 3+ days → test for infection", "source": "Lecture heuristic"},

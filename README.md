@@ -47,7 +47,7 @@ python main.py
 - 6 diseases (pneumonia, dengue, malaria, typhoid, influenza, common cold) with severity, description, treatment, prevention and sources
 - 20 symptoms with labels, input type (intensity or yes/no) and synonyms (including Roman Urdu)
 - 7 intermediate facts (e.g. `dengue_signs`) that allow rule chaining
-- 22 rules: 19 diagnostic rules and 3 red-flag rules
+- 23 rules: 20 diagnostic rules and 3 red-flag rules
 - the sources (WHO, CDC, textbook references) and the disclaimer
 
 **Factual vs heuristic knowledge:** factual knowledge is the disease descriptions, severities, symptom definitions, treatments, prevention and red-flag warnings. Heuristic knowledge is the diagnostic rules and their certainty factors, which are rules of thumb assigned by the knowledge engineers, not clinically validated probabilities. Every item in the JSON is tagged with its `knowledge_type`.
@@ -69,7 +69,7 @@ python main.py
 python -m expert_system.kb_verify
 ```
 
-This runs the 8 consistency checks (unknown symptoms, bad THEN targets, unused facts, incomplete diseases, invalid CFs/priorities, CF overcounting, unreachable diseases, rule cycles). On success it prints `KB verified: 6 diseases, 20 symptoms, 7 intermediate facts, 22 rules`; otherwise it lists every error and exits with code 1. `main.py` runs the same check at startup.
+This runs the 8 consistency checks (unknown symptoms, bad THEN targets, unused facts, incomplete diseases, invalid CFs/priorities, CF overcounting, unreachable diseases, rule cycles). On success it prints `KB verified: 6 diseases, 20 symptoms, 7 intermediate facts, 23 rules`; otherwise it lists every error and exits with code 1. `main.py` runs the same check at startup.
 
 ## Inference Engine
 
@@ -142,6 +142,8 @@ The runner prints six sections as tables, a summary, and `TOTAL: x/y passed`. Th
 | [6] Order independence | shuffling the order of rules and red flags (50 fixed seeds) never changes any CF |
 
 A failing clinical case is a finding about the knowledge base, not a reason to edit the test.
+
+**Example of the iterative development cycle:** test T02 (WHO: "the most common early symptoms of malaria are fever, headache and chills") originally failed because no rule accepted that combination. The cause was found (the old R8 needed chills AND sweating), the rule was split (R8 now needs only chills; new R20 covers sweating), and all 78 tests passed again. The change and the rejected alternative (a rule that would double-count evidence and be refused by `kb_verify`) are recorded in section 13 of `docs/kb_design.md`.
 
 ## Progress
 
