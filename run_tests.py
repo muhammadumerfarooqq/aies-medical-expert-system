@@ -875,7 +875,68 @@ def section_gui(kb: dict):
     if re.search(r"font-size:\s*[0-9.]+px", CSS):
         problems.append("fixed px font sizes found; sizes must come from the scale (15px floors use max())")
     add("G27", "Bold verdict + scale", "big name/confidence/pill, one scale variable", problems)
-    return rows, passed, 27, []
+
+    # ---- crowded cases (Phase 6F): all 20 symptoms, 6 conditions, 3 red flags
+    everything = ", ".join(("severe " + sym["label"]) if sym["input"] == "intensity" else sym["label"]
+                           for sym in kb["symptoms"].values())
+    unstated = ", ".join(sym["label"] for sym in kb["symptoms"].values())
+    at = say(fresh(), unstated)
+    problems = errors(at)
+    html = joined(at)
+    if len(consult(at)["symptoms"]) != len(kb["symptoms"]):
+        problems.append("all symptoms should be understood")
+    if html.count("sevnote") != 1 or "default (not stated)" not in html:
+        problems.append("exactly one 'default (not stated)' note expected above the grid")
+    if any("default (not stated)" in c.value for c in at.caption):
+        problems.append("no per-card default line in the compact grid")
+    if f"{len(kb['symptoms'])} symptoms selected" not in html:
+        problems.append("one-line 'N symptoms selected' expected")
+    if "You said:" in " ".join(c.value for c in at.caption):
+        problems.append("the side panel must collapse when many symptoms are selected")
+    add("G28", "Crowded severity step", "one default note, one-line count, no per-card default", problems)
+
+    at = to_diagnosis(everything)
+    result = consult(at)["hyb"]["result"]
+    html = joined(at)
+    banners = [b for b in html_blocks(at) if 'class="alert' in b]
+    problems = errors(at)
+    if len(banners) != 1 or 'class="alert multi"' not in banners[0]:
+        problems.append(f"{len(banners)} red-flag banners, one combined banner expected")
+    else:
+        for flag in result.alerts:
+            if flag["id"] not in banners[0] or flag["message"] not in banners[0]:
+                problems.append(f"banner lacks {flag['id']}")
+        if banners[0].count("<li>") != len(result.alerts) or len(result.alerts) != 3:
+            problems.append("one line per fired flag (3) expected")
+    compact = html.count('class="card compact')
+    if len(result.diseases) <= 3 or compact != len(result.diseases):
+        problems.append(f"{len(result.diseases)} conditions but {compact} compact cards")
+    add("G29", "Crowded diagnosis step", "one banner with 3 flags; compact cards for > 3 conditions", problems)
+
+    at = to_diagnosis(CLOSE_CASE)
+    html = joined(at)
+    problems = errors(at)
+    if 'class="card compact' in html:
+        problems.append("3 or fewer conditions must keep the normal cards")
+    at = to_diagnosis("fever, rash, pain behind the eyes, bleeding gums, runny nose, sneezing")
+    banners = [b for b in html_blocks(at) if 'class="alert' in b]
+    if len(banners) != 1 or 'class="alert multi"' in banners[0] or 'class="alert"' not in banners[0]:
+        problems.append("a single red flag keeps the single-banner look")
+    add("G30", "Normal layout unchanged", "no compact class, single-flag banner as before", problems)
+
+    at = say(fresh(), "fever, headache, cough, chills, sweating, fatigue, sore throat")
+    html = joined(at)
+    captions = [c.value for c in at.caption if "default (not stated)" in c.value]
+    problems = errors(at)
+    if len(consult(at)["symptoms"]) != 7 or "7 symptoms selected" not in html or "You said:" in " ".join(c.value for c in at.caption):
+        problems.append("7 symptoms: side panel should be one line")
+    if len(captions) != 7 or "sevnote" in html:
+        problems.append("7 symptoms keep the normal cards with a default line each")
+    at = say(fresh(), "fever, headache, cough")
+    if "You said:" not in " ".join(c.value for c in at.caption) or "symptoms selected" in joined(at):
+        problems.append("6 or fewer symptoms: the side panel shows the full list")
+    add("G31", "Side panel and normal severity cards", "7: one line; 3: full list", problems)
+    return rows, passed, 31, []
 
 
 def text_of(at) -> str:

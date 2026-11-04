@@ -262,7 +262,7 @@ def render_topbar(kb: dict, S) -> str:
     can_forward = consult is not None and step < reached and not (
         step == 2 and severity_dirty(kb, S, consult))
     with st.container(key="topbar"):
-        left, centre, right = st.columns([3, 6.2, 3.6], vertical_alignment="center")
+        left, centre, right = st.columns([3.4, 6, 3.4], vertical_alignment="center")
         left.markdown(brand_html(), unsafe_allow_html=True)
         back, strip, forward = centre.columns([1.1, 8, 1.1], vertical_alignment="center")
         back.button(":material/arrow_back:", key="nav_back", help="Back", disabled=step <= 1,
@@ -321,52 +321,95 @@ def render_step1(kb: dict, S, consult: dict | None) -> None:
                   args=(kb, S, "ask_pills", True))
 
 
+CROWDED_SYMPTOMS = 9     # more symptoms than this: compact 4-column severity grid
+MANY_SYMPTOMS = 6        # more symptoms than this: the side panel collapses to one line
+CROWDED_CONDITIONS = 3   # more conditions than this: compact diagnosis grid
+
+
+def severity_card(kb: dict, consult: dict, sid: str, levels: list, compact: bool) -> None:
+    """One symptom card: name + Mild|Moderate|Severe (or 'present'). Compact = one row, no default line."""
+    symptom = kb["symptoms"][sid]
+    key = f"card-csev-{sid}" if compact else f"card-sev-{sid}"
+    with st.container(key=key):
+        name = esc(symptom["label"])
+        if sid in consult["read_from"]:
+            name += f' <span class="small">(read from \'{esc(consult["read_from"][sid])}\')</span>'
+        st.markdown(f"<b>{name}</b>", unsafe_allow_html=True)
+        if symptom["input"] == "intensity":
+            st.segmented_control(symptom["label"], levels, key=f"sev_{sid}",
+                                 format_func=str.capitalize, label_visibility="collapsed")
+            if sid in consult["defaulted"] and not compact:
+                st.caption("default (not stated)")
+        else:
+            st.markdown(chip("present"), unsafe_allow_html=True)
+
+
+def side_items(kb: dict, consult: dict) -> None:
+    """Ruled-out, unknown and fuzzy-read items (never dropped, whatever the layout)."""
+    if consult["negated"]:
+        st.markdown("<b>Ruled out</b>", unsafe_allow_html=True)
+        st.markdown("".join(
+            f'<span class="chip out"><s>{esc(kb["symptoms"][s]["label"])}</s></span> '
+            for s in consult["negated"]), unsafe_allow_html=True)
+    if consult["unknown"]:
+        st.markdown("<b>Not in my knowledge base</b>", unsafe_allow_html=True)
+        st.markdown(esc(", ".join(consult["unknown"])))
+    if consult["read_from"]:
+        st.markdown("<b>Read from your words</b>", unsafe_allow_html=True)
+        for sid, word in consult["read_from"].items():
+            st.markdown(f'{esc(kb["symptoms"][sid]["label"])} <span class="small">'
+                        f"(read from '{esc(word)}')</span>", unsafe_allow_html=True)
+
+
+def render_side(kb: dict, consult: dict) -> None:
+    """Side card: the full 'You said' panel, or one line when many symptoms are selected."""
+    count = len(consult["symptoms"])
+    with st.container(key="card-side"):
+        if count > MANY_SYMPTOMS:
+            st.markdown(f'<div class="sidecount">{count} symptoms selected</div>', unsafe_allow_html=True)
+        elif consult["text"]:
+            st.caption("You said:")
+            st.text(consult["text"])
+        side_items(kb, consult)
+        if not (consult["negated"] or consult["unknown"] or consult["read_from"]) and count <= MANY_SYMPTOMS:
+            st.caption("Nothing was ruled out or unclear.")
+
+
 def render_step2(kb: dict, S, consult: dict) -> None:
-    """Step 2: one card per symptom with Mild | Moderate | Severe; side card for the rest."""
+    """Step 2: one card per symptom with Mild | Moderate | Severe; side card for the rest.
+
+    More than 9 symptoms: a compact 4-column grid (name and selector on one row, one default
+    note above the grid); only the grid scrolls and the Diagnose bar stays at the bottom."""
     levels = intensity_levels(kb)
     for sid, value in consult["symptoms"].items():
         if kb["symptoms"][sid]["input"] == "intensity":
             S.setdefault(f"sev_{sid}", value)
-    with st.container(key="grow"):
-        grid, side = st.columns([3, 1])
-    with grid:
+    ids = list(consult["symptoms"])
+    if len(ids) > CROWDED_SYMPTOMS:
         st.markdown('<div class="h-big">How severe is each symptom?</div>', unsafe_allow_html=True)
-        ids = list(consult["symptoms"])
-        for start in range(0, len(ids), 3):
-            for col, sid in zip(st.columns(3), ids[start:start + 3]):
-                symptom = kb["symptoms"][sid]
-                with col.container(key=f"card-sev-{sid}"):
-                    name = esc(symptom["label"])
-                    if sid in consult["read_from"]:
-                        name += f' <span class="small">(read from \'{esc(consult["read_from"][sid])}\')</span>'
-                    st.markdown(f"<b>{name}</b>", unsafe_allow_html=True)
-                    if symptom["input"] == "intensity":
-                        st.segmented_control(symptom["label"], levels, key=f"sev_{sid}",
-                                             format_func=str.capitalize, label_visibility="collapsed")
-                        if sid in consult["defaulted"]:
-                            st.caption("default (not stated)")
-                    else:
-                        st.markdown(chip("present"), unsafe_allow_html=True)
-    with side:
-        with st.container(key="card-side"):
-            if consult["text"]:
-                st.caption("You said:")
-                st.text(consult["text"])
-            if consult["negated"]:
-                st.markdown("<b>Ruled out</b>", unsafe_allow_html=True)
-                st.markdown("".join(
-                    f'<span class="chip out"><s>{esc(kb["symptoms"][s]["label"])}</s></span> '
-                    for s in consult["negated"]), unsafe_allow_html=True)
-            if consult["unknown"]:
-                st.markdown("<b>Not in my knowledge base</b>", unsafe_allow_html=True)
-                st.markdown(esc(", ".join(consult["unknown"])))
-            if consult["read_from"]:
-                st.markdown("<b>Read from your words</b>", unsafe_allow_html=True)
-                for sid, word in consult["read_from"].items():
-                    st.markdown(f'{esc(kb["symptoms"][sid]["label"])} <span class="small">'
-                                f"(read from '{esc(word)}')</span>", unsafe_allow_html=True)
-            if not (consult["negated"] or consult["unknown"] or consult["read_from"]):
-                st.caption("Nothing was ruled out or unclear.")
+        note = (f'<span class="sidecount">{len(ids)} symptoms selected</span>'
+                + (f' <span class="small sevnote">default (not stated): {esc(default_level(kb).capitalize())} '
+                   f'is used unless you change it.</span>' if consult["defaulted"] else ""))
+        st.markdown(f'<div class="sevhead">{note}</div>', unsafe_allow_html=True)
+        if consult["negated"] or consult["unknown"] or consult["read_from"]:
+            with st.container(key="card-side"):
+                side_items(kb, consult)
+        with st.container(key="grow-scroll"):
+            for start in range(0, len(ids), 4):
+                for col, sid in zip(st.columns(4), ids[start:start + 4]):
+                    with col:
+                        severity_card(kb, consult, sid, levels, compact=True)
+    else:
+        with st.container(key="grow"):
+            grid, side = st.columns([3, 1])
+        with grid:
+            st.markdown('<div class="h-big">How severe is each symptom?</div>', unsafe_allow_html=True)
+            for start in range(0, len(ids), 3):
+                for col, sid in zip(st.columns(3), ids[start:start + 3]):
+                    with col:
+                        severity_card(kb, consult, sid, levels, compact=False)
+        with side:
+            render_side(kb, consult)
     with st.container(key="bar"):
         if consult["adding"]:
             symptom_chips(kb, "add_pills", "Add selected", False, S)
@@ -433,6 +476,19 @@ def alert_html(kb: dict, alert: dict) -> str:
     name = " + ".join(display_name(kb, p) for p in flag["if"])
     return (f'<div class="alert" role="alert"><b>RED FLAG · {esc(alert["id"])} · {esc(name)}'
             f'</b> — {esc(alert["message"])}</div>')
+
+
+def alerts_html(kb: dict, alerts: list) -> str:
+    """One red banner for all fired red flags (a single flag keeps the single-flag look)."""
+    if len(alerts) == 1:
+        return alert_html(kb, alerts[0])
+    lines = []
+    for alert in alerts:
+        flag = next(f for f in kb["red_flags"] if f["id"] == alert["id"])
+        name = " + ".join(display_name(kb, p) for p in flag["if"])
+        lines.append(f'<li><b>{esc(alert["id"])} · {esc(name)}</b> — {esc(alert["message"])}</li>')
+    return (f'<div class="alert multi" role="alert"><b class="rfhead">RED FLAG</b>'
+            f'<ul>{"".join(lines)}</ul></div>')
 
 
 @dataclass
@@ -617,12 +673,12 @@ def render_step3(kb: dict, S, consult: dict) -> None:
 
 # --------------------------------------------------------------- step 4
 
-def card_html(kb: dict, rank: int, disease, tied: bool, animate: bool) -> str:
+def card_html(kb: dict, rank: int, disease, tied: bool, animate: bool, compact: bool = False) -> str:
     """Compact disease card: rank, name, severity pill, 48px confidence, bar, evidence strength."""
     sev = kb["meta"]["severity_rank"][disease.severity]
     width = min(max(disease.percent, 0.0), 100.0)
     tag_html = '<span class="tied">tied</span>' if tied else ""
-    return (f'<div class="card{" fade" if animate else ""}"><div class="top"><div>'
+    return (f'<div class="card{" compact" if compact else ""}{" fade" if animate else ""}"><div class="top"><div>'
             f'<span class="rank">#{rank}</span><span class="name">{esc(disease.name)}</span>{tag_html}'
             f'</div><span class="pill sev{sev}">{esc(disease.severity.capitalize())}</span></div>'
             f'<div class="big">{fmt(disease.percent, 1)}% <span class="small">confidence</span></div>'
@@ -685,8 +741,8 @@ def render_step4(kb: dict, S, consult: dict) -> None:
     result = consult["hyb"]["result"]
     version = len(consult["hyb"]["steps"])
     animate = f"dx{version}" not in played
-    for alert in result.alerts:
-        st.markdown(alert_html(kb, alert), unsafe_allow_html=True)
+    if result.alerts:
+        st.markdown(alerts_html(kb, result.alerts), unsafe_allow_html=True)
     if not result.diseases:
         st.markdown('<div class="verdict none"><div class="lbl">RESULT</div><div class="row">'
                     '<span class="vname">Not enough evidence to name a condition</span></div></div>',
@@ -702,25 +758,42 @@ def render_step4(kb: dict, S, consult: dict) -> None:
         if result.below_threshold:
             st.info(below_threshold_text(result))
         tiers = tiers_of(result)
+
+        def draw_card(disease, rank: int, compact: bool) -> None:
+            """One condition card with its Why / Treatment / Prevention control."""
+            tied = any(o is not disease and abs(o.cf - disease.cf) < 1e-9 for o in result.diseases)
+            st.markdown(card_html(kb, rank, disease, tied, animate, compact), unsafe_allow_html=True)
+            choice = st.segmented_control(
+                "Details", SHOW_OPTIONS, key=f"{cid}-tab-{disease.disease_id}",
+                label_visibility="collapsed")
+            if choice:
+                render_panel(kb, result, disease, choice)
+
         rank = 0
-        with st.container(key="grow"):
-            columns = st.columns([len(t) for t in tiers])
-        for number, (column, tier) in enumerate(zip(columns, tiers), 1):
-            with column:
-                st.markdown(f'<div class="tier">Priority {number} · '
-                            f'{esc(tier[0].severity.capitalize())} conditions</div>', unsafe_allow_html=True)
-                for start in range(0, len(tier), 3):
-                    chunk = tier[start:start + 3]
-                    for col, disease in zip(st.columns(len(chunk)), chunk):
-                        rank += 1
-                        tied = any(o is not disease and abs(o.cf - disease.cf) < 1e-9 for o in result.diseases)
-                        with col:
-                            st.markdown(card_html(kb, rank, disease, tied, animate), unsafe_allow_html=True)
-                            choice = st.segmented_control(
-                                "Details", SHOW_OPTIONS, key=f"{cid}-tab-{disease.disease_id}",
-                                label_visibility="collapsed")
-                            if choice:
-                                render_panel(kb, result, disease, choice)
+        if len(result.diseases) > CROWDED_CONDITIONS:
+            # Crowded: tiers stacked full width, cards in rows of three, only this area scrolls.
+            with st.container(key="grow-scroll"):
+                for number, tier in enumerate(tiers, 1):
+                    st.markdown(f'<div class="tier">Priority {number} · '
+                                f'{esc(tier[0].severity.capitalize())} conditions</div>', unsafe_allow_html=True)
+                    for start in range(0, len(tier), 3):
+                        for col, disease in zip(st.columns(3), tier[start:start + 3]):
+                            rank += 1
+                            with col:
+                                draw_card(disease, rank, True)
+        else:
+            with st.container(key="grow"):
+                columns = st.columns([len(t) for t in tiers])
+            for number, (column, tier) in enumerate(zip(columns, tiers), 1):
+                with column:
+                    st.markdown(f'<div class="tier">Priority {number} · '
+                                f'{esc(tier[0].severity.capitalize())} conditions</div>', unsafe_allow_html=True)
+                    for start in range(0, len(tier), 3):
+                        chunk = tier[start:start + 3]
+                        for col, disease in zip(st.columns(len(chunk)), chunk):
+                            rank += 1
+                            with col:
+                                draw_card(disease, rank, False)
         st.caption(TIER_CAPTION + " " + CONFIDENCE_NOTE)
     with st.container(key="bar"):
         first, second, _ = st.columns([2, 2, 5])

@@ -237,6 +237,7 @@ The GUI is covered by headless smoke tests (section [8] of `python run_tests.py`
 - [x] Phase 6: Streamlit GUI
 - [x] Phase 6B + 6C + 6D: Chat UI, severity step, wizard layout
 - [x] Phase 6E: one size scale (bigger text, window-filling steps) and a bold, big diagnosis verdict
+- [x] Phase 6F: density fix for crowded cases (one combined red-flag banner, compact condition grid, compact severity grid, no wrapped buttons or tagline)
 - [ ] Phase 7: Screenshots
 - [ ] Phase 8: Report & Title Page
 - [ ] Phase 9: Review & Submission
