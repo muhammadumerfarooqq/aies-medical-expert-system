@@ -281,12 +281,13 @@ def render_topbar(kb: dict, S) -> str:
 
 # ----------------------------------------------------------- step 1 and 2
 
-def symptom_chips(kb: dict, key: str, button: str, replace: bool, S) -> None:
-    """Large chip group of every KB symptom plus a primary button."""
+def symptom_chips(kb: dict, key: str, button: str, replace: bool, S, with_button: bool = True) -> None:
+    """Large chip group of every KB symptom, plus a primary button unless with_button is False."""
     st.pills("Symptoms", list(kb["symptoms"]), selection_mode="multi", key=key,
              format_func=lambda sid: kb["symptoms"][sid]["label"], label_visibility="collapsed")
-    st.button(button, type="primary", key=f"{key}-go", on_click=merge_picked,
-              args=(kb, S, key, replace))
+    if with_button:
+        st.button(button, type="primary", key=f"{key}-go", on_click=merge_picked,
+                  args=(kb, S, key, replace))
 
 
 def render_step1(kb: dict, S, consult: dict | None) -> None:
@@ -294,7 +295,8 @@ def render_step1(kb: dict, S, consult: dict | None) -> None:
     msg = consult["msg"] if consult else ""
     if consult and "ask_pills" not in S:
         S["ask_pills"] = list(consult["symptoms"])
-    left, right = st.columns([3, 2])
+    with st.container(key="grow"):
+        left, right = st.columns([3, 2])
     with left:
         st.markdown('<div class="h-big">What are you feeling?</div>', unsafe_allow_html=True)
         if msg == "nomatch":
@@ -305,7 +307,7 @@ def render_step1(kb: dict, S, consult: dict | None) -> None:
         elif msg == "empty":
             st.markdown('<div class="muted-card">Tap at least one symptom, or type how you feel.</div>',
                         unsafe_allow_html=True)
-        symptom_chips(kb, "ask_pills", "Continue", True, S)
+        symptom_chips(kb, "ask_pills", "Continue", True, S, with_button=False)
     with right:
         with st.container(key="card-type"):
             st.markdown('<div class="h-big" style="font-size:26px">Or type it</div>',
@@ -314,6 +316,9 @@ def render_step1(kb: dict, S, consult: dict | None) -> None:
             for i, text in enumerate(EXAMPLES):
                 st.button(text, key=f"ex{i}", on_click=start_from_text, args=(kb, S, text),
                           use_container_width=True)
+    with st.container(key="bar"):
+        st.button("Continue", type="primary", key="ask_pills-go", on_click=merge_picked,
+                  args=(kb, S, "ask_pills", True))
 
 
 def render_step2(kb: dict, S, consult: dict) -> None:
@@ -322,7 +327,8 @@ def render_step2(kb: dict, S, consult: dict) -> None:
     for sid, value in consult["symptoms"].items():
         if kb["symptoms"][sid]["input"] == "intensity":
             S.setdefault(f"sev_{sid}", value)
-    grid, side = st.columns([3, 1])
+    with st.container(key="grow"):
+        grid, side = st.columns([3, 1])
     with grid:
         st.markdown('<div class="h-big">How severe is each symptom?</div>', unsafe_allow_html=True)
         ids = list(consult["symptoms"])
@@ -361,13 +367,14 @@ def render_step2(kb: dict, S, consult: dict) -> None:
                                 f"(read from '{esc(word)}')</span>", unsafe_allow_html=True)
             if not (consult["negated"] or consult["unknown"] or consult["read_from"]):
                 st.caption("Nothing was ruled out or unclear.")
-    if consult["adding"]:
-        symptom_chips(kb, "add_pills", "Add selected", False, S)
-    first, second, _ = st.columns([2, 2, 5])
-    first.button("Diagnose", type="primary", key="diagnose", on_click=do_diagnose, args=(kb, S),
-                 use_container_width=True)
-    second.button("Add more symptoms", key="add_more", on_click=toggle_adding, args=(consult,),
-                  use_container_width=True)
+    with st.container(key="bar"):
+        if consult["adding"]:
+            symptom_chips(kb, "add_pills", "Add selected", False, S)
+        first, second, _ = st.columns([2, 2, 5])
+        first.button("Diagnose", type="primary", key="diagnose", on_click=do_diagnose, args=(kb, S),
+                     use_container_width=True)
+        second.button("Add more symptoms", key="add_more", on_click=toggle_adding, args=(consult,),
+                      use_container_width=True)
 
 
 # ------------------------------------------------------------ result helpers
@@ -578,7 +585,8 @@ def render_step3(kb: dict, S, consult: dict) -> None:
         name = f"bw{k}"
         panels.append((name, backward_panel(kb, consult, step, previous, name, name in played)))
         previous = step.result_after
-    left, right = st.columns(2)
+    with st.container(key="grow"):
+        left, right = st.columns(2)
     with left:
         with st.container(key=f"col-f-{cid}"):
             panel_block(consult, "chain", chain, "fchain")
@@ -601,8 +609,9 @@ def render_step3(kb: dict, S, consult: dict) -> None:
             render_question(kb, consult)
             for name, panel in reversed(panels[:-1]):
                 panel_block(consult, name, panel, name)
-    st.button("See diagnosis", type="primary", key="see_diagnosis", on_click=go_diagnosis,
-              args=(consult,))
+    with st.container(key="bar"):
+        st.button("See diagnosis", type="primary", key="see_diagnosis", on_click=go_diagnosis,
+                  args=(consult,))
     consult["played"] |= {"chain", *[name for name, _ in panels]}
 
 
@@ -639,18 +648,23 @@ def render_panel(kb: dict, result, disease, choice: str) -> None:
 
 
 def verdict_html(kb: dict, result) -> str:
-    """Headline verdict banner (HTML) for a result with at least one condition."""
+    """Big verdict banner: label, disease name, confidence, severity pill, 'Because' line."""
     top = result.diseases[0]
     tied = [d for d in result.diseases if abs(d.cf - top.cf) < 1e-9]
     if len(tied) > 1:
-        head = f"{join_names([d.name for d in tied])} are equally likely ({fmt(top.percent, 1)}% each)"
+        name = join_names([d.name for d in tied])
+        conf = f"equally likely · {fmt(top.percent, 1)}% each"
+        pill = ""
     else:
-        head = f"Most likely: {top.name} · {fmt(top.percent, 1)}% confidence · {top.severity.capitalize()}"
+        name = top.name
+        conf = f"{fmt(top.percent, 1)}%"
+        pill = f'<span class="vsev">{esc(top.severity.capitalize())}</span>'
     because = ", ".join(kb["symptoms"][s]["label"] for s in supporting_symptoms(kb, result, top.disease_id))
     sub = f"Because: {because}." if because else ""
     if any(d.cf > top.cf + 1e-9 for d in result.diseases[1:]):
         sub += " " + PRIORITY_LINE
-    return (f'<div class="verdict"><div class="head">{esc(head)}</div>'
+    return (f'<div class="verdict"><div class="lbl">MOST LIKELY</div><div class="row">'
+            f'<span class="vname">{esc(name)}</span><span class="vconf">{esc(conf)}</span>{pill}</div>'
             f'<div class="sub">{esc(sub)}</div></div>')
 
 
@@ -674,8 +688,9 @@ def render_step4(kb: dict, S, consult: dict) -> None:
     for alert in result.alerts:
         st.markdown(alert_html(kb, alert), unsafe_allow_html=True)
     if not result.diseases:
-        st.markdown('<div class="verdict none"><div class="head">Not enough evidence to name a '
-                    'condition</div></div>', unsafe_allow_html=True)
+        st.markdown('<div class="verdict none"><div class="lbl">RESULT</div><div class="row">'
+                    '<span class="vname">Not enough evidence to name a condition</span></div></div>',
+                    unsafe_allow_html=True)
         st.info(no_diagnosis_message(kb))
         for hint in required_hints(result):
             st.info(hint)
@@ -688,7 +703,8 @@ def render_step4(kb: dict, S, consult: dict) -> None:
             st.info(below_threshold_text(result))
         tiers = tiers_of(result)
         rank = 0
-        columns = st.columns([len(t) for t in tiers])
+        with st.container(key="grow"):
+            columns = st.columns([len(t) for t in tiers])
         for number, (column, tier) in enumerate(zip(columns, tiers), 1):
             with column:
                 st.markdown(f'<div class="tier">Priority {number} · '
@@ -706,11 +722,12 @@ def render_step4(kb: dict, S, consult: dict) -> None:
                             if choice:
                                 render_panel(kb, result, disease, choice)
         st.caption(TIER_CAPTION + " " + CONFIDENCE_NOTE)
-    first, second, _ = st.columns([2, 2, 5])
-    first.button("Edit symptoms", key="edit_symptoms", on_click=goto_severity, args=(S, consult),
-                 use_container_width=True)
-    second.button("New consultation", key="new_consultation_bottom", on_click=new_consultation,
-                  args=(S,), use_container_width=True)
+    with st.container(key="bar"):
+        first, second, _ = st.columns([2, 2, 5])
+        first.button("Edit symptoms", key="edit_symptoms", on_click=goto_severity, args=(S, consult),
+                     use_container_width=True)
+        second.button("New consultation", key="new_consultation_bottom", on_click=new_consultation,
+                      args=(S,), use_container_width=True)
     consult["played"].add(f"dx{version}")
 
 
@@ -720,14 +737,15 @@ def render_wizard(kb: dict, S) -> None:
     """Draw the current step."""
     consult = S["consult"]
     step = consult["step"] if consult else 1
-    if step == 1:
-        render_step1(kb, S, consult)
-    elif step == 2:
-        render_step2(kb, S, consult)
-    elif step == 3:
-        render_step3(kb, S, consult)
-    else:
-        render_step4(kb, S, consult)
+    with st.container(key="stage"):
+        if step == 1:
+            render_step1(kb, S, consult)
+        elif step == 2:
+            render_step2(kb, S, consult)
+        elif step == 3:
+            render_step3(kb, S, consult)
+        else:
+            render_step4(kb, S, consult)
 
 
 # ---------------------------------------------------- knowledge-base view
@@ -780,9 +798,9 @@ def showcase_card(kb: dict, disease_id: str, levels: list) -> str:
         words if kb["symptoms"][s]["input"] == "intensity" else "present")) for s in roots)
     rules = "".join(f"<li>{esc(line)}</li>" for line in chain_lines(kb, disease_id))
     flags = [f for f in kb["red_flags"] if set(f["if"]) <= set(roots)]
-    flag_html = "".join(f'<div class="alert" style="font-size:16px;padding:.3rem .7rem;margin:.3rem 0">'
+    flag_html = "".join(f'<div class="alert" style="font-size:max(15px,.68rem);padding:.25rem .7rem;margin:.25rem 0">'
                         f'<b>{esc(f["id"])}</b> {esc(f["message"])}</div>' for f in flags)
-    small_list = 'style="font-size:15px;margin:.1rem 0;padding-left:1.1rem"'
+    small_list = 'style="font-size:max(15px,.68rem);margin:.1rem 0;padding-left:1.1rem"'
     return (f'<div class="card kbcard"><div class="top"><span class="name">{esc(disease["name"])}</span>'
             f'<span class="pill sev{sev}">{esc(disease["severity"].capitalize())}</span></div>'
             f'<div class="small">Symptoms used</div><div class="chips">{chips}</div>'
@@ -838,7 +856,13 @@ def select_tile(S, key: str) -> None:
 
 
 def render_kb_view(kb: dict, S, stats: dict) -> None:
-    """Read-only knowledge-base view answering the 'knowledge representation' requirements."""
+    """Read-only knowledge-base view, drawn inside a stage that fills the window."""
+    with st.container(key="stage"):
+        kb_body(kb, S, stats)
+
+
+def kb_body(kb: dict, S, stats: dict) -> None:
+    """Tiles, one example per severity level, the strength strip and the full-KB expander."""
     ranks = kb["meta"]["severity_rank"]
     expected = sorted(ranks, key=ranks.get, reverse=True)
     shown = [kb["diseases"][d]["severity"] for d in KB_SHOWCASE]
@@ -850,10 +874,12 @@ def render_kb_view(kb: dict, S, stats: dict) -> None:
         with column:
             st.button(f"**{title}**  {chr(10)}{value}", key=f"kbtile-{key}", on_click=select_tile,
                       args=(S, key), use_container_width=True, help="Show the table")
-    st.markdown('<div class="h-big" style="font-size:24px">One example per severity level</div>',
+    st.markdown('<div class="h-big" style="font-size:1.4rem">One example per severity level</div>',
                 unsafe_allow_html=True)
     levels = intensity_levels(kb)
-    for column, did in zip(st.columns(3), KB_SHOWCASE):
+    with st.container(key="grow"):
+        example_columns = st.columns(3)
+    for column, did in zip(example_columns, KB_SHOWCASE):
         column.markdown(showcase_card(kb, did, levels), unsafe_allow_html=True)
     weights = kb["meta"]["cf_conventions"]["intensity_cf"]
     strength = " · ".join(f"{k.capitalize()} {w:g}" for k, w in weights.items() if k != "yes")

@@ -673,7 +673,10 @@ def section_gui(kb: dict):
     at = to_diagnosis(CLOSE_CASE)
     text = joined(at)
     problems = errors(at)
-    if "Dengue and Malaria are equally likely (50.0% each)" not in text:
+    verdict = block(at, 'class="verdict')
+    if "MOST LIKELY" not in verdict or 'class="vname">Dengue and Malaria<' not in verdict:
+        problems.append("big verdict with both names expected")
+    if "equally likely · 50.0% each" not in verdict:
         problems.append("tie wording expected")
     if 'class="tied"' not in text:
         problems.append("tied tags expected")
@@ -849,7 +852,30 @@ def section_gui(kb: dict):
     if "prefers-reduced-motion" not in CSS:
         hits.append("prefers-reduced-motion CSS missing")
     add("G26", "No external loads, no timers", "none of " + ", ".join(banned), hits)
-    return rows, passed, 26, []
+
+    # ---- bold verdict and one scale variable (Phase 6E)
+    at = to_diagnosis("fever, rash, pain behind the eyes, bleeding gums, runny nose, sneezing")
+    verdict = block(at, 'class="verdict')
+    result = consult(at)["hyb"]["result"]
+    top = result.diseases[0]
+    problems = errors(at)
+    for needle in ("MOST LIKELY", f'class="vname">{top.name}<', f'class="vconf">{fmt(top.percent, 1)}%<',
+                   f'class="vsev">{top.severity.capitalize()}<', "Because:"):
+        if needle not in verdict:
+            problems.append(f"verdict lacks {needle}")
+    from ui.theme import CSS
+    rules = {"--u:clamp(": "one scale variable", "html{font-size:var(--u)": "root font from the scale",
+             ".verdict .vname{font-size:2.8rem;font-weight:800": "name ~64px at 1920",
+             ".verdict .vconf{font-size:2.45rem;font-weight:800": "confidence ~56px",
+             ".big{font-size:2.8rem;font-weight:800": "card confidence ~64px",
+             ".card .name{font-size:1.4rem;font-weight:800": "card name ~32px"}
+    for needle, label in rules.items():
+        if needle not in CSS:
+            problems.append(f"CSS lacks {label}")
+    if re.search(r"font-size:\s*[0-9.]+px", CSS):
+        problems.append("fixed px font sizes found; sizes must come from the scale (15px floors use max())")
+    add("G27", "Bold verdict + scale", "big name/confidence/pill, one scale variable", problems)
+    return rows, passed, 27, []
 
 
 def text_of(at) -> str:
