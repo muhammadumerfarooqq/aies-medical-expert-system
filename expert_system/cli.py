@@ -123,6 +123,9 @@ def print_table(headers: list[str], rows: list[list[str]]) -> None:
         print("  " + " | ".join(c.ljust(w) for c, w in zip(row, widths)))
 
 
+CONFIDENCE_NOTE = ("Confidence = each condition's share of the total evidence among the matched "
+                   "conditions (adds up to 100%). Evidence strength = the raw MYCIN certainty "
+                   "factor.")
 SAFETY_NOTE = ("Note: severe diseases are listed first even when a milder disease "
                "has higher confidence (safety-first ranking).")
 
@@ -192,6 +195,7 @@ def print_result(kb: dict, result: DiagnosisResult, accepted: dict[str, str],
         rows = [[str(i), d.name, d.severity, fmt(d.percent, 1), fmt(d.cf, 2)]
                 for i, d in enumerate(result.diseases, 1)]
         print_table(["Rank", "Disease", "Severity", "Confidence %", "CF"], rows)
+        print(textwrap.fill(CONFIDENCE_NOTE, width=LINE_WIDTH))
         if severity_outranks_confidence(result):
             print(SAFETY_NOTE)
     else:

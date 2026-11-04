@@ -1,6 +1,6 @@
 """Test runner: python run_tests.py [--verbose]
 
-Eight sections, each printed as an ASCII table:
+Nine sections, each printed as an ASCII table:
   [1] KB verification            - the knowledge base passes all 8 consistency checks
   [2] Clinical cases             - cases written from WHO/CDC descriptions (tests/cases.json)
   [3] Regression                 - exact CFs from the design check (tests/regression.json)
@@ -8,7 +8,8 @@ Eight sections, each printed as an ASCII table:
   [5] Verifier self-tests        - the verifier catches deliberately broken KBs (in memory only)
   [6] Order independence         - shuffling rule order never changes the result
   [7] Hybrid backward chaining   - questions are generated from rules and settle close calls
-  [8] GUI smoke tests            - app.py runs headless (skipped if streamlit is not installed)
+  [8] GUI smoke tests            - the chat app runs headless (skipped if streamlit is not installed)
+  [9] Text parser                - free-text sentences become engine input
 
 A failing test is a finding about the knowledge base, not something to hide.
 Exit code is 1 if anything fails.
@@ -381,25 +382,487 @@ def section_hybrid(kb: dict):
 # ------------------------------------------------------------- [8] GUI smoke tests
 
 def page_text(at) -> str:
-    """All visible text of a headless Streamlit page (markdown, warnings, expanders, metrics)."""
+    """All visible text of a headless Streamlit page (markdown, warnings, infos, expanders, buttons)."""
     parts = [m.value for m in at.markdown] + [w.value for w in at.warning]
-    parts += [e.label for e in at.expander] + [f"{m.label} {m.value}" for m in at.metric]
+    parts += [i.value for i in at.info] + [s.value for s in at.success] + [c.value for c in at.caption]
+    parts += [e.label for e in at.expander] + [b.label for b in at.button]
     return " | ".join(parts)
 
 
+BACK, FORWARD, NEW_TOP = ":material/arrow_back:", ":material/arrow_forward:", ":material/restart_alt:"
+CLOSE_CASE = "I have fever, headache, nausea and body aches"
+THREE_TIERS = "fever, rash, pain behind the eyes, cough, body aches, runny nose, sneezing"
+
+
 def section_gui(kb: dict):
-    """Run app.py headless with streamlit's AppTest; None if streamlit is missing."""
+    """Run the wizard app headless with streamlit's AppTest; None if streamlit is missing."""
     try:
         from streamlit.testing.v1 import AppTest
     except ImportError:
         return None
     import logging
-    logging.getLogger("streamlit").setLevel(logging.ERROR)
+    import re
+    # Streamlit's headless test harness logs harmless "missing ScriptRunContext" warnings;
+    # keep real errors visible.
+    from streamlit import config as streamlit_config
+    from streamlit import logger as streamlit_logger
+    streamlit_config.set_option("logger.level", "error")
+    streamlit_logger.set_log_level("ERROR")
+    for name in list(logging.root.manager.loggerDict):
+        if name.startswith("streamlit"):
+            logging.getLogger(name).setLevel(logging.ERROR)
 
     def fresh():
         """A new headless run of app.py."""
         return AppTest.from_file(str(ROOT / "app.py"), default_timeout=60).run()
 
+    def say(at, text: str):
+        """Type a chat message and run."""
+        at.chat_input[0].set_value(text).run()
+        return at
+
+    def click(at, label: str):
+        """Click the first button with this label."""
+        next(b for b in at.button if b.label == label).click().run()
+        return at
+
+    def button(at, label: str):
+        """The first button with this label."""
+        return next(b for b in at.button if b.label == label)
+
+    def to_reasoning(text: str):
+        """Type a sentence and press Diagnose (step 3)."""
+        return click(say(fresh(), text), "Diagnose")
+
+    def to_diagnosis(text: str):
+        """Type a sentence, Diagnose, then See diagnosis (step 4)."""
+        return click(to_reasoning(text), "See diagnosis")
+
+    def html_blocks(at) -> list[str]:
+        """Markdown elements rendered with unsafe_allow_html."""
+        return [m.value for m in at.markdown if getattr(m, "allow_html", False)]
+
+    def joined(at) -> str:
+        """All unsafe-html text in one string."""
+        return " ".join(html_blocks(at))
+
+    def block(at, marker: str) -> str:
+        """First html block containing a marker ('' if none)."""
+        return next((b for b in html_blocks(at) if marker in b), "")
+
+    def consult(at):
+        """The one consultation state object (None before the first sentence)."""
+        return at.session_state["consult"]
+
+    def tags(chain: str) -> list[str]:
+        """Tag texts of a chain panel in order, consecutive duplicates merged."""
+        found = re.findall(r'class="tagc[^"]*">([^<]+)<', chain)
+        return [t for i, t in enumerate(found) if i == 0 or t != found[i - 1]]
+
+    rows, passed = [], 0
+
+    def add(case_id: str, name: str, expected: str, problems: list[str]) -> None:
+        """Record one row and count it if it passed."""
+        nonlocal passed
+        rows.append([case_id, name, expected, "ok" if not problems else problems[0], pass_fail(problems)])
+        passed += not problems
+
+    def errors(at) -> list[str]:
+        """Exceptions raised by the app."""
+        return [str(e.value) for e in at.exception]
+
+    # ---- wizard flow
+    at = fresh()
+    problems = errors(at)
+    if "Shifa" not in " ".join(html_blocks(at)):
+        problems.append("brand name missing")
+    if consult(at) is not None or len(at.chat_input) != 1:
+        problems.append("step 1 should show the chat input and no consultation")
+    if 'class="s now">1 Symptoms' not in block(at, 'class="stepsbar"'):
+        problems.append("progress strip should highlight step 1")
+    add("G1", "App loads on step 1", "no exception, brand, chat input", problems)
+
+    at = say(fresh(), CLOSE_CASE)
+    problems = errors(at)
+    if consult(at)["step"] != 2:
+        problems.append(f"step {consult(at)['step']}")
+    if any('class="verdict' in b or 'class="card' in b for b in html_blocks(at)) or consult(at)["hyb"] is not None:
+        problems.append("a diagnosis is shown before Diagnose was clicked")
+    if len(at.chat_input) != 0:
+        problems.append("typing must only be offered on step 1")
+    if 'class="s now">2 Severity' not in block(at, 'class="stepsbar"'):
+        problems.append("progress strip should highlight step 2")
+    add("G2", "Typing goes to SEVERITY, no diagnosis yet", "step 2, no chat input", problems)
+
+    at = fresh()
+    at.pills(key="ask_pills").set_value(["fever", "headache"]).run()
+    click(at, "Continue")
+    problems = errors(at)
+    if consult(at) is None or consult(at)["step"] != 2 or set(consult(at)["symptoms"]) != {"fever", "headache"}:
+        problems.append("chips path should reach step 2 with the picked symptoms")
+    add("G3", "Chips path", "same severity step", problems)
+
+    at = to_reasoning(CLOSE_CASE)
+    problems = errors(at)
+    if consult(at)["step"] != 3 or 'class="chain pf' not in joined(at):
+        problems.append("Diagnose should reach step 3 with the forward chain")
+    if len(at.chat_input) != 0:
+        problems.append("no chat input on step 3")
+    click(at, "See diagnosis")
+    if consult(at)["step"] != 4 or "Priority 1" not in joined(at):
+        problems.append("See diagnosis should reach step 4")
+    add("G4", "Diagnose then See diagnosis", "step 3 then step 4", problems)
+
+    # ---- severity step
+    def top_cf(level: str) -> float:
+        """Evidence strength of the top condition when the fever is set to a level."""
+        at = say(fresh(), "fever, cough, shortness of breath, chest pain")
+        at.segmented_control(key="sev_fever").set_value(level).run()
+        click(at, "Diagnose")
+        return consult(at)["hyb"]["result"].diseases[0].cf
+
+    moderate, severe = top_cf("moderate"), top_cf("severe")
+    add("G5", "Severity changes the CF", f"moderate {fmt(moderate, 3)} != severe {fmt(severe, 3)}",
+        [] if abs(moderate - severe) > 1e-6 else [f"CF unchanged: {moderate} vs {severe}"])
+
+    at = say(fresh(), "bleeding gums and fever")
+    keys = [s.key for s in at.segmented_control]
+    problems = []
+    if "sev_fever" not in keys:
+        problems.append("fever should have a selector")
+    if "sev_bleeding_gums" in keys:
+        problems.append("presence-only symptom must not have a selector")
+    if "present" not in joined(at):
+        problems.append("'present' expected for the presence-only symptom")
+    add("G6", "Presence-only symptoms", "no selector, shows 'present'", problems)
+
+    at = say(fresh(), "no fever, only headache")
+    problems = errors(at)
+    if "ruled out" not in joined(at).lower() and "Ruled out" not in " ".join(m.value for m in at.markdown):
+        problems.append("ruled-out list expected on step 2")
+    click(at, "Diagnose")
+    if "fever" in consult(at)["hyb"]["known"] or "fever" not in consult(at)["negated"]:
+        problems.append("negated fever must not reach the engine")
+    add("G7", "Negated symptom", "not passed to the engine", problems)
+
+    at = say(fresh(), "im having bhukar and flu")
+    text = joined(at) + " ".join(m.value for m in at.markdown)
+    problems = errors(at)
+    if "read from &#x27;bhukar&#x27;" not in text and "read from 'bhukar'" not in text:
+        problems.append("'(read from bhukar)' expected")
+    if "flu" not in text or "Not in my knowledge base" not in text:
+        problems.append("unknown 'flu' expected")
+    add("G8", "Fuzzy read + unknown phrase", "read from 'bhukar'; flu unknown", problems)
+
+    at = say(fresh(), "flu")
+    problems = errors(at)
+    if "not disease names" not in joined(at):
+        problems.append("'symptoms, not disease names' message expected")
+    if consult(at)["step"] != 1 or consult(at)["hyb"] is not None:
+        problems.append("no diagnosis and still on step 1 expected")
+    add("G9", "Disease name typed", "friendly message, no diagnosis", problems)
+
+    # ---- navigation
+    at = to_reasoning(CLOSE_CASE)
+    problems = errors(at)
+    if not button(at, FORWARD).disabled:
+        problems.append("forward must be disabled on the furthest step")
+    result_before = consult(at)["hyb"]["result"]
+    click(at, BACK)
+    if consult(at)["step"] != 2 or button(at, FORWARD).disabled:
+        problems.append("back should go to step 2 and enable forward")
+    click(at, FORWARD)
+    chain = block(at, 'class="chain pf')
+    if consult(at)["step"] != 3 or 'class="chain pf static' not in chain:
+        problems.append("forward should return to step 3 with a static chain")
+    if consult(at)["hyb"]["result"] is not result_before:
+        problems.append("navigation must not re-run the engine")
+    click(at, BACK)
+    click(at, BACK)
+    if consult(at)["step"] != 1 or not button(at, BACK).disabled:
+        problems.append("back must be disabled on step 1")
+    if button(at, BACK).label != BACK or button(at, FORWARD).label != FORWARD:
+        problems.append("icon labels expected")
+    add("G10", "Back / forward icons", "bounded, no engine re-run, static", problems)
+
+    at = to_reasoning(CLOSE_CASE)
+    click(at, "Yes")
+    problems = errors(at)
+    if len(consult(at)["hyb"]["steps"]) != 1:
+        problems.append("one answer expected")
+    click(at, BACK)
+    at.segmented_control(key="sev_fever").set_value("severe").run()
+    click(at, "Diagnose")
+    state = consult(at)
+    if state["hyb"]["steps"] or state["reached"] != 3 or state["step"] != 3:
+        problems.append("changing a severity must discard backward answers and restart step 3")
+    if state["symptoms"]["fever"] != "severe":
+        problems.append("the new severity should be kept")
+    add("G11", "Change severity then Diagnose", "old answers discarded", problems)
+
+    # ---- reasoning step
+    at = to_reasoning(CLOSE_CASE)
+    chain = block(at, 'class="chain pf')
+    result = consult(at)["hyb"]["result"]
+    wanted = ["FACTS"] + ["RULE FIRES", "NEW FACT"] * len(result.trace) + ["RESULT"]
+    seen = re.findall(r'class="tagc[^"]*">([^<]+)<', chain)
+    badges = re.findall(r'<span class="rbadge">(\w+)</span>', chain)
+    indexes = [int(i) for i in re.findall(r"--i:(\d+)", chain)]
+    gap = float(re.search(r"--gap:([0-9.]+)s", chain).group(1))
+    problems = errors(at)
+    if seen != wanted:
+        problems.append(f"tags {seen}")
+    if badges != [f.rule_id for f in result.trace]:
+        problems.append(f"rows {badges} != fired rules {[f.rule_id for f in result.trace]}")
+    if indexes != list(range(len(indexes))):
+        problems.append(f"--i not increasing: {indexes}")
+    if gap * len(indexes) > 4.0 + 1e-9:
+        problems.append(f"chain would take {gap * len(indexes):.3f}s")
+    if 'class="chain pf play' not in chain:
+        problems.append("first render should animate ('play')")
+    add("G12", "Forward panel tags, rows, timing", "FACTS, RULE FIRES, NEW FACT, RESULT; <= 4 s", problems)
+
+    at = to_reasoning(CLOSE_CASE)
+    problems = errors(at)
+    if "One question to settle it" not in text_of(at):
+        problems.append("question card expected for a close call")
+    clear = to_reasoning("severe fever, rash, pain behind the eyes, bleeding gums, runny nose, sneezing")
+    if "Backward chaining not needed: the top condition is clearly ahead (gap" not in joined(clear):
+        problems.append("'clearly ahead (gap NN% > 15%)' expected for a clear two-condition case")
+    single = to_reasoning("fever, cough, shortness of breath, chest pain")
+    if "Backward chaining not needed" not in joined(single):
+        problems.append("'Backward chaining not needed' expected when one condition is shown")
+    add("G13", "Question card / not needed", "close call asks, clear case does not", problems)
+
+    at = to_reasoning(CLOSE_CASE)
+    click(at, "Yes")
+    chain = block(at, 'class="chain pb')
+    problems = errors(at)
+    if tags(chain) != ["GOAL", "NEEDS", "ASK", "YOU SAID", "PROVEN ✓"]:
+        problems.append(f"backward tags {tags(chain)}")
+    css = __import__("ui.theme", fromlist=["CSS"]).CSS
+    fw = re.search(r"--fw:(#\w+)", css).group(1).lower()
+    bw = re.search(r"--bw:(#\w+)", css).group(1).lower()
+    taken = {c.lower() for c in re.findall(r"--(?:accent|sev[123]|sev[123]-bg):(#\w+)", css)}
+    if fw == bw or fw in taken or bw in taken:
+        problems.append(f"forward {fw} / backward {bw} colours must be unique")
+    if 'class="chain pb play' not in chain:
+        problems.append("the new backward panel should animate")
+    gap = float(re.search(r"--gap:([0-9.]+)s", chain).group(1))
+    if gap * len(re.findall(r"--i:\d+", chain)) > 4.0 + 1e-9:
+        problems.append("backward panel longer than 4 s")
+    add("G14", "Backward panel tags and colours", "GOAL, NEEDS, ASK, YOU SAID, PROVEN; unique colours", problems)
+
+    at = to_reasoning(CLOSE_CASE)
+    before = block(at, 'class="chain pf')
+    nonce_before = consult(at)["nonce"].get("chain", 0)
+    click(at, ":material/replay: Replay")
+    after = block(at, 'class="chain pf')
+    problems = errors(at)
+    if before == after or consult(at)["nonce"].get("chain", 0) != nonce_before + 1:
+        problems.append("Replay must change the HTML and bump the replay counter (container key)")
+    if 'class="chain pf play' not in after:
+        problems.append("Replay should animate again")
+    click(at, BACK)
+    click(at, FORWARD)
+    if 'class="chain pf static' not in block(at, 'class="chain pf'):
+        problems.append("a later rerun must render the chain statically")
+    add("G15", "Replay and play-once", "Replay differs; later reruns static", problems)
+
+    # ---- diagnosis step
+    at = to_diagnosis(CLOSE_CASE)
+    text = joined(at)
+    problems = errors(at)
+    if "Dengue and Malaria are equally likely (50.0% each)" not in text:
+        problems.append("tie wording expected")
+    if 'class="tied"' not in text:
+        problems.append("tied tags expected")
+    add("G16", "Tie wording and tags", "equally likely, tied tags", problems)
+
+    at = to_diagnosis("chest pain and shortness of breath")
+    texts = [m.value for m in at.markdown]
+    alert_at = next((i for i, t in enumerate(texts) if 'class="alert"' in t), None)
+    verdict_at = next((i for i, t in enumerate(texts) if 'class="verdict' in t), None)
+    problems = errors(at)
+    if alert_at is None or verdict_at is None or alert_at > verdict_at:
+        problems.append("the red-flag banner must come first")
+    if "Chest pain with shortness of breath" not in " ".join(texts):
+        problems.append("emergency advice missing")
+    if "Not enough evidence to name a condition" not in " ".join(texts):
+        problems.append("no-condition verdict expected")
+    add("G17", "Red flag banner first", "banner above the verdict", problems)
+
+    at = to_diagnosis("fever, rash, pain behind the eyes, runny nose, sneezing, sore throat")
+    result = consult(at)["hyb"]["result"]
+    heads = re.findall(r"Priority (\d) · (\w+) conditions", joined(at))
+    expected, last = [], None
+    for d in result.diseases:
+        if d.severity != last:
+            expected.append((str(len(expected) + 1), d.severity.capitalize()))
+            last = d.severity
+    problems = errors(at)
+    if heads != expected or len(heads) < 2:
+        problems.append(f"tier headers {heads}, engine order {expected}")
+    cfs = {d.disease_id: d.cf for d in result.diseases}
+    if not cfs.get("common_cold", 0) > cfs.get("dengue", 1):
+        problems.append("mixed case should have the mild condition at higher confidence")
+    ids = [d.disease_id for d in result.diseases]
+    if ids[:1] != ["dengue"] or set(ids) != {"dengue", "common_cold"}:
+        problems.append(f"order {ids}")
+    if "Listed first because severe conditions take priority over less severe ones." not in text_of(at):
+        problems.append("corrected 'Listed first because...' line expected")
+    if "even if a less severe one has higher confidence" not in " ".join(c.value for c in at.caption):
+        problems.append("corrected tier caption expected")
+    add("G18", "Priority tiers (mixed case)", "severe tier first, corrected wording", problems)
+
+    at = to_diagnosis(CLOSE_CASE)
+    cid = consult(at)["id"]
+    default_html = joined(at)
+    problems = errors(at)
+    if "Suggested because" in default_html or "No specific medicine" in default_html:
+        problems.append("panels must be closed by default")
+    at.segmented_control(key=f"{cid}-tab-dengue").set_value("Treatment").run()
+    if "No specific medicine" not in joined(at):
+        problems.append("Treatment panel should open")
+    at.segmented_control(key=f"{cid}-tab-dengue").set_value("Prevention").run()
+    if "Repellents" not in joined(at):
+        problems.append("Prevention panel should open")
+    at.segmented_control(key=f"{cid}-tab-dengue").set_value("Why this?").run()
+    why = next((b for b in html_blocks(at) if "Suggested because" in b), "")
+    shown = re.findall(r"<li>(R\d+) ·", why)
+    result = consult(at)["hyb"]["result"]
+    latest = {f.rule_id: f for f in result.trace if f.concluded_fact}
+    wanted_rules, frontier = set(), ["dengue"]
+    while frontier:
+        fact = frontier.pop()
+        for f in latest.values():
+            if f.concluded_fact == fact and f.rule_id not in wanted_rules:
+                wanted_rules.add(f.rule_id)
+                frontier += [p for p in f.premises if p not in kb["symptoms"]]
+    if set(shown) != wanted_rules or not wanted_rules:
+        problems.append(f"Why panel rules {shown}, trace says {sorted(wanted_rules)}")
+    if "Combined certainty" not in why:
+        problems.append("combined certainty line expected")
+    add("G19", "Why / Treatment / Prevention", "closed by default; Why = traced rules", problems)
+
+    at = to_reasoning(CLOSE_CASE)
+    click(at, "Yes")
+    click(at, "See diagnosis")
+    texts = [m.value for m in at.markdown]
+    problems = errors(at)
+    if "RED FLAG" not in " ".join(texts) or "Bleeding gums or nose can be a warning sign" not in " ".join(texts):
+        problems.append("red alert expected after Yes")
+    cards = [t for t in texts if 'class="card' in t]
+    if not cards or "Dengue" not in cards[0]:
+        problems.append("Dengue should be the first card")
+    add("G20", "Answer Yes", "alert, Dengue first", problems)
+
+    at = to_reasoning(CLOSE_CASE)
+    for _ in range(3):
+        click(at, "No")
+    problems = errors(at)
+    if len(consult(at)["hyb"]["steps"]) != 3:
+        problems.append(f"{len(consult(at)['hyb']['steps'])} questions asked")
+    if not any("Outcome:" in i.value for i in at.info):
+        problems.append("st.info outcome expected")
+    if any("Outcome:" in s.value for s in at.success):
+        problems.append("green box only for 'separated'")
+    add("G21", "All No", "3 asked, info box", problems)
+
+    at = to_diagnosis("fever and cough")
+    saved = dict(consult(at)["symptoms"])
+    click(at, "Edit symptoms")
+    problems = errors(at)
+    if consult(at)["step"] != 2 or consult(at)["symptoms"] != saved:
+        problems.append("Edit symptoms should return to step 2 with the same symptoms")
+    click(at, BACK)
+    click(at, FORWARD)
+    click(at, "Diagnose")
+    click(at, "See diagnosis")
+    click(at, "New consultation")
+    if consult(at) is not None:
+        problems.append("New consultation should clear the state")
+    at = to_reasoning("fever and cough")
+    click(at, NEW_TOP)
+    if consult(at) is not None:
+        problems.append("the top icon button should clear the state too")
+    add("G22", "Edit symptoms / New consultation", "back to step 2; state cleared", problems)
+
+    # ---- knowledge-base view
+    at = fresh()
+    at.segmented_control(key="view").set_value("Knowledge base").run()
+    problems = errors(at)
+    tiles = {b.key: b.label for b in at.button if b.key and b.key.startswith("kbtile-")}
+    n_flags = len(kb["red_flags"])
+    checks = {"kbtile-symptoms": str(len(kb["symptoms"])), "kbtile-diseases": str(len(kb["diseases"])),
+              "kbtile-rules": f"{len(kb['rules'])} rules + {n_flags} red flags",
+              "kbtile-severity": "Mild · Moderate · Severe", "kbtile-treatments": "treatment + prevention"}
+    for key, needle in checks.items():
+        if needle not in tiles.get(key, ""):
+            problems.append(f"tile {key}: '{needle}' not in '{tiles.get(key)}'")
+    cards = [b for b in html_blocks(at) if 'class="card kbcard"' in b]
+    names = [re.search(r'class="name">([^<]+)<', c).group(1) for c in cards]
+    sevs = [re.search(r'class="pill sev\d">([^<]+)<', c).group(1) for c in cards]
+    if names != ["Dengue", "Influenza", "Common Cold"] or sevs != ["Severe", "Moderate", "Mild"]:
+        problems.append(f"showcase {names} {sevs}")
+    for card in cards:
+        for needle in ("Symptoms used", "IF ", "THEN", "Treatment", "Prevention"):
+            if needle not in card:
+                problems.append(f"showcase card lacks '{needle}'")
+    roots, frontier, seen = set(), ["dengue"], set()
+    while frontier:
+        fact = frontier.pop()
+        for rule in kb["rules"]:
+            if rule["then"] == fact and rule["id"] not in seen:
+                seen.add(rule["id"])
+                for p in rule["if"]:
+                    (roots.add(p) if p in kb["symptoms"] else frontier.append(p))
+    missing = [kb["symptoms"][s]["label"] for s in roots if kb["symptoms"][s]["label"] not in cards[0]]
+    if missing:
+        problems.append(f"Dengue card lacks root symptoms {missing}")
+    if not any("Show the full knowledge base" in e.label for e in at.expander):
+        problems.append("full-KB expander missing")
+    if f"{len(kb['rules'])} rules" not in joined(at) + " ".join(c.value for c in at.caption) + " ".join(tiles.values()):
+        problems.append("rule count expected")
+    add("G23", "Knowledge base view", "5 tiles, 3 examples (severe, moderate, mild), expander", problems)
+
+    # ---- brand, safety, sources
+    old_name = "Dr." + " Rule"
+    files = [ROOT / "app.py", ROOT / "README.md", ROOT / "run_tests.py"] + sorted((ROOT / "ui").glob("*.py")) \
+        + sorted((ROOT / "docs").glob("*.md")) + sorted((ROOT / "expert_system").glob("*.py"))
+    hits = [f.name for f in files if old_name in f.read_text(encoding="utf-8")]
+    at = fresh()
+    if "Shifa" not in " ".join(html_blocks(at)):
+        hits.append("Shifa missing from the page")
+    add("G24", "Brand", "'Shifa' present, old name absent everywhere", hits)
+
+    at = say(fresh(), "<script>alert(1)</script> fever")
+    problems = errors(at)
+    if any("<script" in b.lower() for b in html_blocks(at)):
+        problems.append("raw <script> found in unsafe html")
+    add("G25", "Script text is escaped", "no raw tag in html", problems)
+
+    scanned = [ROOT / "app.py"] + sorted((ROOT / "ui").glob("*.py"))
+    banned = ["http://", "https://", "@import", "<script", "fonts.googleapis", "sleep", "write_stream"]
+    hits = [f"{f.name}: {b}" for f in scanned for b in banned if b in f.read_text(encoding="utf-8")]
+    from ui.theme import CSS
+    if "prefers-reduced-motion" not in CSS:
+        hits.append("prefers-reduced-motion CSS missing")
+    add("G26", "No external loads, no timers", "none of " + ", ".join(banned), hits)
+    return rows, passed, 26, []
+
+
+def text_of(at) -> str:
+    """Unsafe-html markdown plus captions, infos and warnings, as one string."""
+    return " ".join([m.value for m in at.markdown] + [c.value for c in at.caption]
+                    + [i.value for i in at.info] + [w.value for w in at.warning])
+
+
+# ------------------------------------------------------------------ [9] text parser
+
+def section_text_parser(kb: dict):
+    """Test expert_system/text_parser.py (free-text input)."""
+    from expert_system.text_parser import parse_text
     rows, passed = [], 0
 
     def add(case_id: str, name: str, expected: str, actual: str, problems: list[str]) -> None:
@@ -408,38 +871,107 @@ def section_gui(kb: dict):
         rows.append([case_id, name, expected, actual, pass_fail(problems)])
         passed += not problems
 
-    at = fresh()
-    add("G1", "App loads", "no exception", f"{len(at.exception)} exceptions",
-        [str(e.value) for e in at.exception])
+    def ids(text: str) -> set:
+        """Symptom ids found in a text."""
+        return set(parse_text(kb, text).symptoms)
 
-    at = fresh()
-    at.selectbox(key="example").select("T01 Dengue").run()
-    at.button(key="diagnose").click().run()
-    text = page_text(at)
-    problems = [str(e.value) for e in at.exception]
-    if "Dengue (" not in text:
-        problems.append("Dengue not shown")
-    add("G2", "T01 example + Diagnose", "Dengue shown", "Dengue shown" if not problems else "see below", problems)
+    # P1: every synonym, label and id of every symptom parses back to its symptom.
+    misses = [(sid, name) for sid, s in kb["symptoms"].items()
+              for name in s["synonyms"] + [s["label"], sid] if sid not in ids(name)]
+    total = sum(len(s["synonyms"]) + 2 for s in kb["symptoms"].values())
+    add("P1", "Every KB phrase parses back", f"{total} phrases", f"{total - len(misses)} ok",
+        [f"misses: {misses[:3]}"] if misses else [])
 
-    at = fresh()
-    at.multiselect(key="chosen").set_value(
-        ["fever", "headache", "nausea_vomiting", "body_aches"]).run()
-    at.button(key="diagnose").click().run()
-    text = page_text(at)
-    problems = [str(e.value) for e in at.exception]
-    if not any("Close call" in w.value for w in at.warning):
-        problems.append("no close-call warning")
-    if "Why I'm asking" not in text or "Bleeding gums or nose" not in text:
-        problems.append("first question should mention Bleeding gums or nose")
-    add("G3", "Close case + Diagnose", "close-call warning; first question about bleeding gums",
-        "ok" if not problems else "see below", problems)
+    got = ids("I have fever and headache")
+    add("P2", "English sentence", "fever, headache", ",".join(sorted(got)),
+        [] if got == {"fever", "headache"} else ["wrong symptoms"])
 
-    at = fresh()
-    rules = [m.value for m in at.metric if m.label == "Rules"]
-    expected = str(len(kb["rules"]) + len(kb["red_flags"]))
-    problems = [] if rules == [expected] else [f"Rules metric {rules}, expected {expected}"]
-    add("G4", "Knowledge base tab", f"{expected} rules", f"{rules}", problems)
-    return rows, passed, 4, []
+    fever_ru, head_ru = kb["symptoms"]["fever"]["synonyms"][-1], kb["symptoms"]["headache"]["synonyms"][-1]
+    sentence = f"mujhe {fever_ru} aur {head_ru} hai"
+    got = ids(sentence)
+    add("P3", "Roman Urdu sentence", sentence, ",".join(sorted(got)),
+        [] if got == {"fever", "headache"} else ["wrong symptoms"])
+
+    problems = []
+    a = parse_text(kb, "no fever, only headache")
+    b = parse_text(kb, f"{fever_ru} nahi hai")
+    if set(a.symptoms) != {"headache"} or a.negated != ["fever"]:
+        problems.append(f"'no fever, only headache' -> {a.symptoms} {a.negated}")
+    if b.symptoms or b.negated != ["fever"]:
+        problems.append(f"'{fever_ru} nahi hai' -> {b.symptoms} {b.negated}")
+    add("P4", "Negation", "ruled out, not diagnosed", "ok" if not problems else problems[0], problems)
+
+    problems = []
+    a = parse_text(kb, "severe headache").symptoms.get("headache")
+    b = parse_text(kb, f"halka {fever_ru}").symptoms.get("fever")
+    if a != "severe" or b != "mild":
+        problems.append(f"severe headache -> {a}, halka {fever_ru} -> {b}")
+    add("P5", "Intensity words", "severe / mild", f"{a} / {b}", problems)
+
+    follow_up = next(sid for sid, s in kb["symptoms"].items() if s.get("ask_only_if"))
+    outcomes = {n: follow_up in parse_text(kb, f"fever for {n} days").symptoms for n in (2, 3, 4, 5)}
+    problems = [] if outcomes == {2: False, 3: False, 4: True, 5: True} else [str(outcomes)]
+    add("P6", "Duration", "only > 3 days is prolonged", str(outcomes), problems)
+
+    problems = []
+    for text in ["asdf qwer zxcv", "", "!!!", "   "]:
+        try:
+            if parse_text(kb, text).symptoms:
+                problems.append(f"'{text}' gave symptoms")
+        except Exception as error:               # a crash is a failure
+            problems.append(f"'{text}' crashed: {error}")
+    add("P7", "Gibberish / empty", "empty symptoms, no crash", "ok" if not problems else problems[0], problems)
+
+    parsed = parse_text(kb, "fever and itching")
+    problems = [] if (set(parsed.symptoms) == {"fever"} and "itching" in parsed.unknown) else [str(parsed)]
+    add("P8", "Unknown phrase reported", "fever parsed, itching unknown",
+        f"{sorted(parsed.symptoms)} / {parsed.unknown}", problems)
+
+    clauses = ["severe headache", "no cough", "fever for 5 days", "chest pain", "sore throat"]
+    reference = None
+    problems = []
+    for seed in range(50):
+        order = clauses[:]
+        random.Random(seed).shuffle(order)
+        p = parse_text(kb, ", ".join(order))
+        signature = (sorted(p.symptoms.items()), sorted(p.negated), sorted(p.unknown), p.duration_days)
+        if reference is None:
+            reference = signature
+        elif signature != reference:
+            problems.append(f"seed {seed} differs")
+            break
+    add("P9", "Clause order independence", "50 shuffles identical", "ok" if not problems else problems[0], problems)
+
+    text = (ROOT / "expert_system" / "text_parser.py").read_text(encoding="utf-8").lower()
+    names = list(kb["diseases"]) + [d["name"] for d in kb["diseases"].values()]
+    names += list(kb["symptoms"]) + [s["label"] for s in kb["symptoms"].values()]
+    found = sorted({n for n in names if n.lower() in text})
+    add("P10", "No KB names in text_parser.py", "none", ",".join(found) or "none found",
+        [f"found {found}"] if found else [])
+
+    p = parse_text(kb, "im having bhukar and flu")
+    problems = []
+    if set(p.symptoms) != {"fever"} or p.read_from != {"fever": "bhukar"} or p.unknown != ["flu"]:
+        problems.append(f"{p.symptoms} {p.read_from} {p.unknown}")
+    add("P11", "Typo + unknown in one sentence", "fever (read from bhukar), unknown flu",
+        f"{sorted(p.symptoms)} {p.read_from} {p.unknown}", problems)
+
+    p = parse_text(kb, "I have a bad headche")
+    problems = [] if ("headache" in p.symptoms and p.read_from.get("headache") == "headche") else [str(p)]
+    add("P12", "Typo inside a longer sentence", "headache read from headche",
+        f"{sorted(p.symptoms)} {p.read_from}", problems)
+
+    problems = []
+    for text in ["the a my im having", "i am having been", "m"]:
+        p = parse_text(kb, text)
+        if p.symptoms or p.unknown:
+            problems.append(f"'{text}' -> {p.symptoms} {p.unknown}")
+    add("P13", "Filler-only text", "empty, nothing unknown", "ok" if not problems else problems[0], problems)
+
+    p = parse_text(kb, "I have fever and headche")
+    problems = [] if p.read_from == {"headache": "headche"} else [f"read_from {p.read_from}"]
+    add("P14", "read_from only for fuzzy matches", "{headache: headche}", str(p.read_from), problems)
+    return rows, passed, 14, []
 
 
 # ------------------------------------------------------------------------- main
@@ -459,7 +991,7 @@ def print_section(title: str, headers: list[str], rows: list[list[str]], failure
 
 
 def main() -> int:
-    """Run all eight sections and print the summary; return the exit code."""
+    """Run all nine sections and print the summary; return the exit code."""
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     parser = argparse.ArgumentParser(description="Run the expert system tests")
     parser.add_argument("--verbose", action="store_true", help="print full diagnosis of failing cases")
@@ -487,6 +1019,7 @@ def main() -> int:
         ("[6] Order independence", ["Shuffles", "Cases", "Outcome", "Result"], section_order),
         ("[7] Hybrid backward chaining", ["ID", "Case", "Expected", "Actual", "Result"], section_hybrid),
         ("[8] GUI smoke tests", ["ID", "Case", "Expected", "Actual", "Result"], section_gui),
+        ("[9] Text parser", ["ID", "Case", "Expected", "Actual", "Result"], section_text_parser),
     ]
     for title, headers, function in sections:
         outcome = function(kb)

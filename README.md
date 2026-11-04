@@ -10,12 +10,16 @@ Artificial Intelligence & Expert Systems (AIES), Fall 2026, NED University
 
 ```
 AIES-CCP/
-├── app.py                   # Streamlit GUI (presentation only)
+├── app.py                   # Streamlit wizard app "Shifa" (thin entry point)
+├── ui/
+│   ├── theme.py             # Brand constants (change the name here) and CSS
+│   └── components.py        # Render functions: chat, cards, reasoning, knowledge-base view
 ├── main.py                  # Entry point: verifies the KB, then starts the CLI
 ├── expert_system/
 │   ├── __init__.py          # Package marker for the engine code
 │   ├── kb_verify.py         # Loads the KB and checks its consistency (8 checks)
 │   ├── engine.py            # Generic forward-chaining inference engine (no medical names)
+│   ├── text_parser.py       # Free-text input (English / Roman Urdu) -> symptoms, negation, intensity
 │   ├── backward.py          # Backward chaining: generates questions when two diseases are close
 │   └── cli.py               # Command-line interface (interactive and --symptoms modes)
 ├── data/
@@ -25,6 +29,7 @@ AIES-CCP/
 │   ├── cases.json           # 14 clinical test cases written from WHO/CDC descriptions
 │   └── regression.json      # 7 regression cases with exact expected CFs
 ├── docs/
+│   ├── LIMITATIONS.md       # Known limitations with viva defences and status
 │   ├── kb_design.md         # Design document: source of truth for the KB
 │   ├── diagrams/.gitkeep    # Architecture and flow diagrams for the report
 │   └── screenshots/.gitkeep # Screenshots of the running system for the report
@@ -133,7 +138,7 @@ Symptoms can be separated by commas, "and", "aur", "&" or "+" (for example `bukh
 python run_tests.py            # add --verbose to print the full diagnosis of failing cases
 ```
 
-The runner prints eight sections as tables, a summary, and `TOTAL: x/y passed`. The exit code is 1 if anything fails.
+The runner prints nine sections as tables, a summary, and `TOTAL: x/y passed`. The exit code is 1 if anything fails.
 
 | Section | What it proves |
 |---|---|
@@ -144,7 +149,8 @@ The runner prints eight sections as tables, a summary, and `TOTAL: x/y passed`. 
 | [5] Verifier self-tests | deliberately broken copies of the KB (kept in memory only) are caught by `kb_verify` |
 | [6] Order independence | shuffling the order of rules and red flags (50 fixed seeds) never changes any CF |
 | [7] Hybrid backward chaining | close calls are detected, questions are generated from the rules in the right order, scripted answers separate the diseases, no symptom is asked twice, and `backward.py` contains no disease or symptom names |
-| [8] GUI smoke tests | `app.py` loads without errors, the T01 example gives Dengue, a close case shows the close-call warning and a bleeding-gums question, and the knowledge base tab shows 23 rules (skipped if streamlit is not installed) |
+| [8] GUI smoke tests | wizard order and typing only on step 1; chips and typed paths; severity changes the CF; presence-only symptoms and negation; fuzzy read; back/forward icons (bounded, no engine re-run, static); changing a severity discards backward answers; forward-chain tags FACTS, RULE FIRES, NEW FACT, RESULT in engine order and the 4-second limit; backward tags GOAL, NEEDS, ASK, YOU SAID, PROVEN and unique panel colours; Replay and play-once; tie wording, red banner first, priority tiers in engine order and corrected wording; panels closed by default and Why = traced rules; Yes and all-No flows; Edit symptoms and New consultation; knowledge-base tiles, three severity examples and expander; brand; escaping; no external loads or timers (skipped if streamlit is not installed) |
+| [9] Text parser | every KB phrase parses back; English and Roman Urdu; negation; intensity; durations; gibberish; unknown phrases; clause order; no KB names in the parser; typos next to fillers (`read_from`) |
 
 A failing clinical case is a finding about the knowledge base, not a reason to edit the test.
 
@@ -190,28 +196,35 @@ python main.py --symptoms "fever, headache, ulti, badan dard"
 python main.py --symptoms "fever, headache, ulti, badan dard" --answers "bleeding gums:yes"
 ```
 
-## Graphical interface
+## Graphical interface: "Shifa" (wizard UI)
 
-The GUI is optional and needs Python 3.11+ (the engine, CLI and tests run on 3.10+ with no installs).
+Python 3.11+ for the GUI only; the engine, CLI and tests need nothing.
 
 ```
 pip install -r requirements.txt
 python -m streamlit run app.py
 ```
 
-`app.py` is presentation only: all reasoning, ranking, symptom matching and text come from the `expert_system` package and the knowledge base.
+It works fully offline (system fonts, no CDN, no JavaScript files, no telemetry) and fits the window without page scrolling. The name lives in `ui/theme.py`. The app only displays what the engine returns, and all motion is CSS.
 
-| Tab | What it shows |
+**The flow, in four lines** (the top bar shows the four steps; back and forward arrows move between steps already reached):
+
+1. **Symptoms:** tap symptom chips, type a sentence in English or Roman Urdu (typing is only offered here), or use an example.
+2. **Severity:** choose Mild, Moderate or Severe for each symptom (presence-only symptoms show "present"). Ruled-out, unknown and fuzzy-read ("read from 'bhukar'") items are listed on the side.
+3. **Reasoning:** left, forward chaining (blue) builds step by step; right, backward chaining (violet) asks one question when two conditions are close, then draws its own chain. Replay restarts an animation.
+4. **Diagnosis:** red-flag banner, verdict, and the conditions grouped by priority tier with Why this? / Treatment / Prevention on each card. "Edit symptoms" goes back to step 2.
+
+The **Knowledge base** view answers the knowledge-representation requirements: five requirement tiles (counts computed from the KB), one example per severity level (a severe, a moderate and a mild disease with its symptoms, rules, treatment and prevention), the severity weights, and an expander with the full knowledge base.
+
+**Free-text examples** (`expert_system/text_parser.py`, vocabulary taken from the KB):
+
+| You type | Understood as |
 |---|---|
-| Diagnosis | Example cases, symptom picker, free-text input (English or Roman Urdu, with "Did you mean?"), intensity controls and follow-up questions. Results: red-flag alerts first, the ranked table with confidence bars and severity badges, the backward-chaining panel (one question at a time when two diseases are close), and an expander per disease with its justification, treatment, prevention and sources |
-| Reasoning trace | One row per forward-chaining cycle: conflict set, fired rule, concluded fact, CF before and after, re-fire |
-| Why not | Why each disease that was not shown was ruled out |
-| Backward chaining | The questions asked, why they were asked, the answers, and the ranking after each |
-| Knowledge base | Counts, rules (filterable by disease), diseases, symptoms and red flags |
+| `I have severe headache and fever for 5 days` | headache (severe), fever (moderate), prolonged fever |
+| `im having bhukar and flu` | fever (read from 'bhukar'); "flu" reported as not in the knowledge base |
+| `no fever, only headache` | headache; fever shown as ruled out |
 
-When no disease is shown, the Diagnosis tab shows the same required-symptom hint as the CLI.
-
-The GUI is covered by headless smoke tests (section [8] of `python run_tests.py`); they are skipped automatically if streamlit is not installed.
+The GUI is covered by headless smoke tests (section [8] of `python run_tests.py`, 26 checks); the parser by section [9] (14 checks). The layout, animation and Replay were additionally checked in real Chrome (see `docs/LIMITATIONS.md`, L27).
 
 ## Progress
 
@@ -222,6 +235,7 @@ The GUI is covered by headless smoke tests (section [8] of `python run_tests.py`
 - [x] Phase 4: Tests
 - [x] Phase 5: Hybrid Backward Chaining
 - [x] Phase 6: Streamlit GUI
+- [x] Phase 6B + 6C + 6D: Chat UI, severity step, wizard layout
 - [ ] Phase 7: Screenshots
 - [ ] Phase 8: Report & Title Page
 - [ ] Phase 9: Review & Submission
