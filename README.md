@@ -42,6 +42,8 @@ AIES-CCP/
 
 ## How to Run
 
+New machine? Follow [docs/SETUP.md](docs/SETUP.md).
+
 Requires Python 3.10+. No installs needed.
 
 ```
@@ -143,7 +145,7 @@ The runner prints nine sections as tables, a summary, and `TOTAL: x/y passed`. T
 | Section | What it proves |
 |---|---|
 | [1] KB verification | the knowledge base passes all 8 consistency checks |
-| [2] Clinical cases | 13 cases in `tests/cases.json`, written from WHO/CDC symptom descriptions (the source quote is stored with each case), not from our own rules. They check the most likely disease, ranking, red-flag alerts, unknown symptoms and edge cases |
+| [2] Clinical cases | 14 cases in `tests/cases.json`, written from WHO/CDC symptom descriptions (the source quote is stored with each case), not from our own rules. They check the most likely disease, ranking, red-flag alerts, unknown symptoms and edge cases |
 | [3] Regression | 7 cases in `tests/regression.json` with exact expected CFs (tolerance 0.001), so any accidental change to a rule or CF is noticed |
 | [4] CLI input parsing | separators ("and", "aur", "&"), Roman Urdu synonyms, no splitting on "or", and "did you mean" suggestions |
 | [5] Verifier self-tests | deliberately broken copies of the KB (kept in memory only) are caught by `kb_verify` |
@@ -224,7 +226,7 @@ The **Knowledge base** view answers the knowledge-representation requirements: f
 | `im having bhukar and flu` | fever (read from 'bhukar'); "flu" reported as not in the knowledge base |
 | `no fever, only headache` | headache; fever shown as ruled out |
 
-The GUI is covered by headless smoke tests (section [8] of `python run_tests.py`, 26 checks); the parser by section [9] (14 checks). The layout, animation and Replay were additionally checked in real Chrome (see `docs/LIMITATIONS.md`, L27).
+The GUI is covered by headless smoke tests (section [8] of `python run_tests.py`, 31 checks); the parser by section [9] (14 checks). The layout, animation and Replay were additionally checked in real Chrome (see `docs/LIMITATIONS.md`, L27).
 
 ## Progress
 
@@ -238,6 +240,7 @@ The GUI is covered by headless smoke tests (section [8] of `python run_tests.py`
 - [x] Phase 6B + 6C + 6D: Chat UI, severity step, wizard layout
 - [x] Phase 6E: one size scale (bigger text, window-filling steps) and a bold, big diagnosis verdict
 - [x] Phase 6F: density fix for crowded cases (one combined red-flag banner, compact condition grid, compact severity grid, no wrapped buttons or tagline)
+- [x] Final fixes: the second example button now gives a real diagnosis (Influenza), stale test counts corrected (132 checks in total), duplicate report files removed from the project root, setup guide added (`docs/SETUP.md`)
 - [ ] Phase 7: Screenshots
 - [ ] Phase 8: Report & Title Page
 - [ ] Phase 9: Review & Submission

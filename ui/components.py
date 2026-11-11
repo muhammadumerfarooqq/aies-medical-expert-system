@@ -24,7 +24,7 @@ from expert_system.text_parser import intensity_levels, parse_text
 from ui.theme import (APP_NAME, CSS, FOOTER, KB_SHOWCASE, MARK_SVG, MAX_CHAIN_SECONDS,
                       MAX_GAP_SECONDS, REQUIREMENTS, STEPS, TAGLINE, VIEWS)
 
-EXAMPLES = ["I have fever, headache, nausea and body aches", "bukhar aur khansi hai",
+EXAMPLES = ["I have fever, headache, nausea and body aches", "bukhar, khansi aur badan dard hai",
             "chest pain and shortness of breath"]
 SHOW_OPTIONS = ["Why this?", "Treatment", "Prevention"]
 ANIM_SECONDS = 0.5          # duration of one step animation (added to the last delay)
